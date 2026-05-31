@@ -7,9 +7,6 @@
  * correct for that point in history.
  */
 
-import { appendFileSync, mkdirSync } from "node:fs";
-import { homedir } from "node:os";
-import { dirname, join } from "node:path";
 import { StringEnum } from "@earendil-works/pi-ai";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Text, truncateToWidth } from "@earendil-works/pi-tui";
@@ -65,19 +62,6 @@ const FAILED_ICON = "✗";
 const GREEN_FG = "\x1b[32m";
 const RESET_FG = "\x1b[39m";
 const AUTO_HIDE_AFTER_TURNS = 4;
-const DEBUG = !!process.env.PI_TODO_DEBUG;
-const DEBUG_LOG_PATH = join(homedir(), ".pi", "agent", "pi-todo-debug.log");
-
-function debug(...args: unknown[]): void {
-	if (!DEBUG) return;
-	try {
-		mkdirSync(dirname(DEBUG_LOG_PATH), { recursive: true });
-		const line = args.map((arg) => typeof arg === "string" ? arg : JSON.stringify(arg)).join(" ");
-		appendFileSync(DEBUG_LOG_PATH, `[${new Date().toISOString()}] ${line}\n`, "utf8");
-	} catch (error) {
-		console.error("[pi-todo] failed to write debug log", error);
-	}
-}
 
 /** Force terminal-green for completed checkmarks, independent of theme success color. */
 function green(text: string): string {
@@ -223,21 +207,14 @@ export default function (pi: ExtensionAPI) {
 
 	const allTodosTerminal = () => todos.length > 0 && todos.every(isTerminal);
 
-	const refreshAutoHideState = (source: string) => {
-		const wasHidden = widgetHidden;
+	const refreshAutoHideState = () => {
 		if (!allTodosTerminal()) {
-			if (allTerminalSinceTurn !== undefined || widgetHidden) {
-				debug(source, "auto-hide reset", { currentTurn, allTerminalSinceTurn, widgetHidden, todos: todos.length });
-			}
 			allTerminalSinceTurn = undefined;
 			widgetHidden = false;
 			return;
 		}
 		allTerminalSinceTurn ??= currentTurn;
-		const elapsed = currentTurn - allTerminalSinceTurn;
-		if (elapsed >= AUTO_HIDE_AFTER_TURNS) widgetHidden = true;
-		debug(source, "auto-hide check", { currentTurn, allTerminalSinceTurn, elapsed, threshold: AUTO_HIDE_AFTER_TURNS, hidden: widgetHidden });
-		if (!wasHidden && widgetHidden) debug(source, "auto-hide triggered");
+		if (currentTurn - allTerminalSinceTurn >= AUTO_HIDE_AFTER_TURNS) widgetHidden = true;
 	};
 
 	const snapshot = (action: TodoDetails["action"], extra: Partial<TodoDetails> = {}): TodoDetails => ({
@@ -263,7 +240,7 @@ export default function (pi: ExtensionAPI) {
 				else nextId = Math.max(1, ...todos.map((todo) => todo.id + 1));
 			}
 		}
-		refreshAutoHideState("reconstructState");
+		refreshAutoHideState();
 	};
 
 	pi.on("session_start", async (_event, ctx) => {
@@ -294,15 +271,13 @@ export default function (pi: ExtensionAPI) {
 	pi.on("turn_start", async (_event, ctx) => {
 		widget.setUICtx(ctx.ui as UICtx);
 		currentTurn++;
-		refreshAutoHideState("turn_start");
-		debug("turn_start", { currentTurn, allTerminalSinceTurn, widgetHidden });
+		refreshAutoHideState();
 		widget.update();
 	});
 
 	pi.on("agent_end", async () => {
 		widget.setAgentActive(false);
-		refreshAutoHideState("agent_end");
-		debug("agent_end", { currentTurn, allTerminalSinceTurn, widgetHidden });
+		refreshAutoHideState();
 		widget.update();
 	});
 
@@ -401,7 +376,7 @@ export default function (pi: ExtensionAPI) {
 						};
 					}
 					todo.state = params.state;
-					refreshAutoHideState("complete");
+					refreshAutoHideState();
 					widget.update();
 					return {
 						content: [{ type: "text" as const, text: `Todo #${todo.id} marked ${todo.state}` }],
