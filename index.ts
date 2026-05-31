@@ -7,6 +7,9 @@
  * correct for that point in history.
  */
 
+import { appendFileSync, mkdirSync } from "node:fs";
+import { homedir } from "node:os";
+import { dirname, join } from "node:path";
 import { StringEnum } from "@earendil-works/pi-ai";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Text, truncateToWidth } from "@earendil-works/pi-tui";
@@ -63,9 +66,17 @@ const GREEN_FG = "\x1b[32m";
 const RESET_FG = "\x1b[39m";
 const AUTO_HIDE_AFTER_TURNS = 4;
 const DEBUG = !!process.env.PI_TODO_DEBUG;
+const DEBUG_LOG_PATH = join(homedir(), ".pi", "agent", "pi-todo-debug.log");
 
 function debug(...args: unknown[]): void {
-	if (DEBUG) console.error("[pi-todo]", ...args);
+	if (!DEBUG) return;
+	try {
+		mkdirSync(dirname(DEBUG_LOG_PATH), { recursive: true });
+		const line = args.map((arg) => typeof arg === "string" ? arg : JSON.stringify(arg)).join(" ");
+		appendFileSync(DEBUG_LOG_PATH, `[${new Date().toISOString()}] ${line}\n`, "utf8");
+	} catch (error) {
+		console.error("[pi-todo] failed to write debug log", error);
+	}
 }
 
 /** Force terminal-green for completed checkmarks, independent of theme success color. */
