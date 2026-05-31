@@ -18,10 +18,14 @@ pi -e ./index.ts
 
 ## Usage
 
-The extension adds:
+The extension adds a branch-aware `todo` tool for the agent:
 
-- `todo` tool for the agent: `list`, `add`, `toggle`, `clear`
-- `/todos` command for an interactive current-branch todo view
+- `list`
+- `add` with `items: string[]` (use an array even for one todo)
+- `toggle` with `id`
+- `clear`
+
+Todos appear automatically in a widget above the editor when the list is non-empty.
 
 Todo state is stored in pi session tool-result details, so it survives reload/resume and follows session branches correctly.
 
