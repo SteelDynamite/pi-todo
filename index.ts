@@ -233,10 +233,11 @@ export default function (pi: ExtensionAPI) {
 			const msg = entry.message;
 			if (msg.role !== "toolResult" || msg.toolName !== "todo") continue;
 
-			const details = msg.details as TodoDetails | undefined;
-			if (details) {
+			const details = msg.details as Partial<TodoDetails> | undefined;
+			if (Array.isArray(details?.todos)) {
 				todos = details.todos.map(normalizeTodo).filter((todo): todo is Todo => !!todo);
-				nextId = details.nextId;
+				if (typeof details.nextId === "number") nextId = details.nextId;
+				else nextId = Math.max(1, ...todos.map((todo) => todo.id + 1));
 			}
 		}
 		refreshAutoHideState();
