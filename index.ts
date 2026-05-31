@@ -400,7 +400,7 @@ export default function (pi: ExtensionAPI) {
 
 		renderResult(result, { expanded }, theme, _context) {
 			const details = result.details as TodoDetails | undefined;
-			if (!details) {
+			if (!details?.action) {
 				const text = result.content[0];
 				return new Text(text?.type === "text" ? text.text : "", 0, 0);
 			}
@@ -446,6 +446,11 @@ export default function (pi: ExtensionAPI) {
 
 				case "toggle":
 					return new Text(theme.fg("success", "✓ Updated todo"), 0, 0);
+
+				default: {
+					const text = result.content[0];
+					return new Text(text?.type === "text" ? text.text : "", 0, 0);
+				}
 			}
 		},
 	});
