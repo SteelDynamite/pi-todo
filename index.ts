@@ -12,65 +12,105 @@ import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-a
 import { Text, truncateToWidth } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 
+type TodoState = "pending" | "done" | "failed";
+type TodoAction = "list" | "add" | "complete" | "clear";
+
 interface Todo {
 	id: number;
 	text: string;
-	done: boolean;
+	state: TodoState;
 }
 
 interface TodoDetails {
-	action: "list" | "add" | "toggle" | "clear";
+	action: TodoAction | "toggle";
 	todos: Todo[];
 	nextId: number;
 	added?: Todo[];
+	completed?: Todo;
 	error?: string;
 }
+
+type LegacyTodo = Partial<Todo> & { id?: number; text?: string; done?: boolean };
 
 type Theme = {
 	fg(color: string, text: string): string;
 	strikethrough(text: string): string;
 };
 
+type WidgetTui = { terminal: { columns: number }; requestRender(): void };
+
 type UICtx = {
 	setWidget(
 		key: string,
-		content: undefined | ((tui: { terminal: { columns: number }; requestRender(): void }, theme: Theme) => { render(): string[]; invalidate(): void }),
+		content: undefined | ((tui: WidgetTui, theme: Theme) => { render(): string[]; invalidate(): void }),
 		options?: { placement?: "aboveEditor" | "belowEditor" },
 	): void;
 };
 
 const TodoParams = Type.Object({
-	action: StringEnum(["list", "add", "toggle", "clear"] as const),
+	action: StringEnum(["list", "add", "complete", "clear"] as const),
 	items: Type.Optional(Type.Array(Type.String(), { description: "Todo texts to add. Required for add; an array of one is valid.", minItems: 1 })),
-	id: Type.Optional(Type.Number({ description: "Todo ID (for toggle)" })),
+	replace: Type.Optional(Type.Boolean({ description: "For add: replace the current list instead of appending to it" })),
+	id: Type.Optional(Type.Number({ description: "Todo ID (for complete)" })),
+	state: Type.Optional(StringEnum(["done", "failed"] as const, { description: "Completion state for complete" })),
 });
 
 const MAX_VISIBLE_TODOS = 10;
+const IN_PROGRESS_FRAMES = ["▹", "▸", "▶", "▸"];
+const AUTO_HIDE_AFTER_TURNS = 4;
+
+function normalizeTodo(todo: LegacyTodo): Todo | undefined {
+	if (typeof todo.id !== "number" || typeof todo.text !== "string") return undefined;
+	const state: TodoState = todo.state === "done" || todo.state === "failed" || todo.state === "pending"
+		? todo.state
+		: todo.done
+			? "done"
+			: "pending";
+	return { id: todo.id, text: todo.text, state };
+}
 
 function cloneTodos(todos: Todo[]): Todo[] {
 	return todos.map((todo) => ({ ...todo }));
 }
 
+function isTerminal(todo: Todo): boolean {
+	return todo.state === "done" || todo.state === "failed";
+}
+
 class TodoWidget {
 	private uiCtx: UICtx | undefined;
-	private tui: { requestRender(): void } | undefined;
+	private tui: WidgetTui | undefined;
 	private widgetRegistered = false;
+	private frame = 0;
+	private interval: ReturnType<typeof setInterval> | undefined;
+	private agentActive = false;
 
-	constructor(private getTodos: () => Todo[]) {}
+	constructor(
+		private getTodos: () => Todo[],
+		private isHidden: () => boolean,
+	) {}
 
 	setUICtx(ctx: UICtx): void {
 		this.uiCtx = ctx;
 	}
 
+	setAgentActive(active: boolean): void {
+		this.agentActive = active;
+		this.syncTimer();
+		this.update();
+	}
+
 	update(): void {
 		if (!this.uiCtx) return;
 		const todos = this.getTodos();
+		const shouldHide = todos.length === 0 || this.isHidden();
 
-		if (todos.length === 0) {
+		if (shouldHide) {
 			if (this.widgetRegistered) {
 				this.uiCtx.setWidget("todo", undefined);
 				this.widgetRegistered = false;
 			}
+			this.syncTimer();
 			return;
 		}
 
@@ -87,27 +127,57 @@ class TodoWidget {
 		} else {
 			this.tui?.requestRender();
 		}
+
+		this.syncTimer();
 	}
 
 	dispose(): void {
+		if (this.interval) clearInterval(this.interval);
+		this.interval = undefined;
 		if (this.uiCtx) this.uiCtx.setWidget("todo", undefined);
 		this.widgetRegistered = false;
 		this.tui = undefined;
 	}
 
-	private renderWidget(tui: { terminal: { columns: number } }, theme: Theme): string[] {
+	private syncTimer(): void {
+		const hasImpliedActiveTodo = this.getTodos().some((todo) => !isTerminal(todo));
+		const shouldAnimate = this.agentActive && hasImpliedActiveTodo && !this.isHidden();
+		if (shouldAnimate && !this.interval) {
+			this.interval = setInterval(() => {
+				this.frame++;
+				this.tui?.requestRender();
+			}, 150);
+		} else if (!shouldAnimate && this.interval) {
+			clearInterval(this.interval);
+			this.interval = undefined;
+		}
+	}
+
+	private renderWidget(tui: WidgetTui, theme: Theme): string[] {
 		const todos = this.getTodos();
-		if (todos.length === 0) return [];
+		if (todos.length === 0 || this.isHidden()) return [];
 
 		const width = tui.terminal.columns;
-		const done = todos.filter((todo) => todo.done).length;
-		const lines = [truncateToWidth(theme.fg("accent", `● ${todos.length} todo(s), ${done} done`), width)];
+		const done = todos.filter((todo) => todo.state === "done").length;
+		const failed = todos.filter((todo) => todo.state === "failed").length;
+		const pending = todos.length - done - failed;
+		const lines = [truncateToWidth(theme.fg("accent", `● ${todos.length} todo(s), ${done} done, ${failed} failed, ${pending} pending`), width)];
+		const impliedActiveId = this.agentActive ? todos.find((todo) => !isTerminal(todo))?.id : undefined;
 
 		for (const todo of todos.slice(0, MAX_VISIBLE_TODOS)) {
-			const check = todo.done ? theme.fg("success", "✓") : theme.fg("dim", "○");
+			const isImpliedActive = todo.id === impliedActiveId;
+			let icon: string;
+			if (todo.state === "done") icon = theme.fg("success", "✓");
+			else if (todo.state === "failed") icon = theme.fg("error", "✗");
+			else if (isImpliedActive) icon = theme.fg("accent", IN_PROGRESS_FRAMES[this.frame % IN_PROGRESS_FRAMES.length]);
+			else icon = theme.fg("dim", "○");
+
 			const id = theme.fg("dim", `#${todo.id}`);
-			const text = todo.done ? theme.fg("dim", theme.strikethrough(todo.text)) : todo.text;
-			lines.push(truncateToWidth(`  ${check} ${id} ${text}`, width));
+			let text = todo.text;
+			if (todo.state === "done") text = theme.fg("dim", theme.strikethrough(todo.text));
+			else if (todo.state === "failed") text = theme.fg("error", todo.text);
+			else if (isImpliedActive) text = theme.fg("accent", `${todo.text}…`);
+			lines.push(truncateToWidth(`  ${icon} ${id} ${text}`, width));
 		}
 
 		if (todos.length > MAX_VISIBLE_TODOS) {
@@ -121,7 +191,22 @@ class TodoWidget {
 export default function (pi: ExtensionAPI) {
 	let todos: Todo[] = [];
 	let nextId = 1;
-	const widget = new TodoWidget(() => todos);
+	let currentTurn = 0;
+	let allTerminalSinceTurn: number | undefined;
+	let widgetHidden = false;
+	const widget = new TodoWidget(() => todos, () => widgetHidden);
+
+	const allTodosTerminal = () => todos.length > 0 && todos.every(isTerminal);
+
+	const refreshAutoHideState = () => {
+		if (!allTodosTerminal()) {
+			allTerminalSinceTurn = undefined;
+			widgetHidden = false;
+			return;
+		}
+		allTerminalSinceTurn ??= currentTurn;
+		if (currentTurn - allTerminalSinceTurn >= AUTO_HIDE_AFTER_TURNS) widgetHidden = true;
+	};
 
 	const snapshot = (action: TodoDetails["action"], extra: Partial<TodoDetails> = {}): TodoDetails => ({
 		action,
@@ -141,14 +226,18 @@ export default function (pi: ExtensionAPI) {
 
 			const details = msg.details as TodoDetails | undefined;
 			if (details) {
-				todos = cloneTodos(details.todos);
+				todos = details.todos.map(normalizeTodo).filter((todo): todo is Todo => !!todo);
 				nextId = details.nextId;
 			}
 		}
+		refreshAutoHideState();
 	};
 
 	pi.on("session_start", async (_event, ctx) => {
 		widget.setUICtx(ctx.ui as UICtx);
+		currentTurn = 0;
+		allTerminalSinceTurn = undefined;
+		widgetHidden = false;
 		reconstructState(ctx);
 		widget.update();
 	});
@@ -164,6 +253,24 @@ export default function (pi: ExtensionAPI) {
 		widget.update();
 	});
 
+	pi.on("agent_start", async (_event, ctx) => {
+		widget.setUICtx(ctx.ui as UICtx);
+		widget.setAgentActive(true);
+	});
+
+	pi.on("turn_start", async (_event, ctx) => {
+		widget.setUICtx(ctx.ui as UICtx);
+		currentTurn++;
+		refreshAutoHideState();
+		widget.update();
+	});
+
+	pi.on("agent_end", async () => {
+		widget.setAgentActive(false);
+		refreshAutoHideState();
+		widget.update();
+	});
+
 	pi.on("session_shutdown", async () => {
 		widget.dispose();
 	});
@@ -171,11 +278,15 @@ export default function (pi: ExtensionAPI) {
 	pi.registerTool({
 		name: "todo",
 		label: "Todo",
-		description: "Manage a todo list. Actions: list, add (items array), toggle (id), clear",
-		promptSnippet: "List, add, toggle, or clear todos in the current branch-aware todo list",
+		description: "Manage a todo list. Actions: list, add (items array, replace boolean), complete (id, state done/failed), clear",
+		promptSnippet: "List, add, complete, fail, or clear todos in the current branch-aware todo list",
 		promptGuidelines: [
 			"Use todo to track multi-step work when a lightweight checklist would help.",
 			"For todo add, always pass items as an array, even for one item.",
+			"For todo add, set replace=true when creating a fresh plan for a new user request or when the existing list is obsolete.",
+			"For todo add, omit replace or set replace=false when adding follow-up work to an existing relevant list.",
+			"Do not create an in-progress todo state; pi-todo automatically treats the top pending todo as in progress while the agent is active.",
+			"Use todo complete with state=done for successful tasks and state=failed for tasks that cannot be completed.",
 		],
 		parameters: TodoParams,
 
@@ -184,13 +295,14 @@ export default function (pi: ExtensionAPI) {
 
 			switch (params.action) {
 				case "list": {
+					widgetHidden = false;
 					widget.update();
 					return {
 						content: [
 							{
 								type: "text" as const,
 								text: todos.length
-									? todos.map((todo) => `[${todo.done ? "x" : " "}] #${todo.id}: ${todo.text}`).join("\n")
+									? todos.map((todo) => `[${todo.state}] #${todo.id}: ${todo.text}`).join("\n")
 									: "No todos",
 							},
 						],
@@ -206,44 +318,59 @@ export default function (pi: ExtensionAPI) {
 						};
 					}
 
+					if (params.replace) {
+						todos = [];
+						nextId = 1;
+					}
+
 					const added = params.items.map((text) => {
-						const todo: Todo = { id: nextId++, text, done: false };
+						const todo: Todo = { id: nextId++, text, state: "pending" };
 						todos.push(todo);
 						return todo;
 					});
 
+					allTerminalSinceTurn = undefined;
+					widgetHidden = false;
 					widget.update();
 					const noun = added.length === 1 ? "todo" : "todos";
+					const verb = params.replace ? "Replaced list and added" : "Added";
 					return {
 						content: [
 							{
 								type: "text" as const,
-								text: `Added ${added.length} ${noun}:\n${added.map((todo) => `#${todo.id}: ${todo.text}`).join("\n")}`,
+								text: `${verb} ${added.length} ${noun}:\n${added.map((todo) => `#${todo.id}: ${todo.text}`).join("\n")}`,
 							},
 						],
 						details: snapshot("add", { added: cloneTodos(added) }),
 					};
 				}
 
-				case "toggle": {
+				case "complete": {
 					if (params.id === undefined) {
 						return {
-							content: [{ type: "text" as const, text: "Error: id required for toggle" }],
-							details: snapshot("toggle", { error: "id required" }),
+							content: [{ type: "text" as const, text: "Error: id required for complete" }],
+							details: snapshot("complete", { error: "id required" }),
+						};
+					}
+					if (params.state !== "done" && params.state !== "failed") {
+						return {
+							content: [{ type: "text" as const, text: "Error: state must be done or failed" }],
+							details: snapshot("complete", { error: "state must be done or failed" }),
 						};
 					}
 					const todo = todos.find((item) => item.id === params.id);
 					if (!todo) {
 						return {
 							content: [{ type: "text" as const, text: `Todo #${params.id} not found` }],
-							details: snapshot("toggle", { error: `#${params.id} not found` }),
+							details: snapshot("complete", { error: `#${params.id} not found` }),
 						};
 					}
-					todo.done = !todo.done;
+					todo.state = params.state;
+					refreshAutoHideState();
 					widget.update();
 					return {
-						content: [{ type: "text" as const, text: `Todo #${todo.id} ${todo.done ? "completed" : "uncompleted"}` }],
-						details: snapshot("toggle"),
+						content: [{ type: "text" as const, text: `Todo #${todo.id} marked ${todo.state}` }],
+						details: snapshot("complete", { completed: { ...todo } }),
 					};
 				}
 
@@ -251,6 +378,8 @@ export default function (pi: ExtensionAPI) {
 					const count = todos.length;
 					todos = [];
 					nextId = 1;
+					allTerminalSinceTurn = undefined;
+					widgetHidden = false;
 					widget.update();
 					return {
 						content: [{ type: "text" as const, text: `Cleared ${count} todos` }],
@@ -263,7 +392,9 @@ export default function (pi: ExtensionAPI) {
 		renderCall(args, theme, _context) {
 			let text = theme.fg("toolTitle", theme.bold("todo ")) + theme.fg("muted", args.action);
 			if (Array.isArray(args.items)) text += ` ${theme.fg("dim", `${args.items.length} item(s)`)}`;
+			if (args.replace) text += ` ${theme.fg("warning", "replace")}`;
 			if (args.id !== undefined) text += ` ${theme.fg("accent", `#${args.id}`)}`;
+			if (args.state) text += ` ${theme.fg(args.state === "failed" ? "error" : "success", args.state)}`;
 			return new Text(text, 0, 0);
 		},
 
@@ -284,9 +415,9 @@ export default function (pi: ExtensionAPI) {
 					let listText = theme.fg("muted", `${details.todos.length} todo(s):`);
 					const display = expanded ? details.todos : details.todos.slice(0, 5);
 					for (const todo of display) {
-						const check = todo.done ? theme.fg("success", "✓") : theme.fg("dim", "○");
-						const itemText = todo.done ? theme.fg("dim", todo.text) : theme.fg("muted", todo.text);
-						listText += `\n${check} ${theme.fg("accent", `#${todo.id}`)} ${itemText}`;
+						const icon = todo.state === "done" ? theme.fg("success", "✓") : todo.state === "failed" ? theme.fg("error", "✗") : theme.fg("dim", "○");
+						const itemText = todo.state === "done" ? theme.fg("dim", todo.text) : todo.state === "failed" ? theme.fg("error", todo.text) : theme.fg("muted", todo.text);
+						listText += `\n${icon} ${theme.fg("accent", `#${todo.id}`)} ${itemText}`;
 					}
 					if (!expanded && details.todos.length > 5) listText += `\n${theme.fg("dim", `... ${details.todos.length - 5} more`)}`;
 					return new Text(listText, 0, 0);
@@ -302,14 +433,19 @@ export default function (pi: ExtensionAPI) {
 					return new Text(text, 0, 0);
 				}
 
-				case "toggle": {
-					const text = result.content[0];
-					const msg = text?.type === "text" ? text.text : "";
-					return new Text(theme.fg("success", "✓ ") + theme.fg("muted", msg), 0, 0);
+				case "complete": {
+					const todo = details.completed;
+					if (!todo) return new Text(theme.fg("success", "✓ Completed todo"), 0, 0);
+					const color = todo.state === "failed" ? "error" : "success";
+					const icon = todo.state === "failed" ? "✗" : "✓";
+					return new Text(theme.fg(color, `${icon} #${todo.id} ${todo.state}`) + " " + theme.fg("muted", todo.text), 0, 0);
 				}
 
 				case "clear":
 					return new Text(theme.fg("success", "✓ ") + theme.fg("muted", "Cleared all todos"), 0, 0);
+
+				case "toggle":
+					return new Text(theme.fg("success", "✓ Updated todo"), 0, 0);
 			}
 		},
 	});
