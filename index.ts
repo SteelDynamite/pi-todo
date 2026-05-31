@@ -57,7 +57,16 @@ const TodoParams = Type.Object({
 
 const MAX_VISIBLE_TODOS = 10;
 const IN_PROGRESS_FRAMES = ["▹", "▸", "▶", "▸"];
+const DONE_ICON = "✓";
+const FAILED_ICON = "✗";
+const GREEN_FG = "\x1b[32m";
+const RESET_FG = "\x1b[39m";
 const AUTO_HIDE_AFTER_TURNS = 4;
+
+/** Force terminal-green for completed checkmarks, independent of theme success color. */
+function green(text: string): string {
+	return `${GREEN_FG}${text}${RESET_FG}`;
+}
 
 function normalizeTodo(todo: LegacyTodo): Todo | undefined {
 	if (typeof todo.id !== "number" || typeof todo.text !== "string") return undefined;
@@ -167,8 +176,8 @@ class TodoWidget {
 		for (const todo of todos.slice(0, MAX_VISIBLE_TODOS)) {
 			const isImpliedActive = todo.id === impliedActiveId;
 			let icon: string;
-			if (todo.state === "done") icon = theme.fg("success", "✓");
-			else if (todo.state === "failed") icon = theme.fg("error", "✗");
+			if (todo.state === "done") icon = green(DONE_ICON);
+			else if (todo.state === "failed") icon = theme.fg("error", FAILED_ICON);
 			else if (isImpliedActive) icon = theme.fg("accent", IN_PROGRESS_FRAMES[this.frame % IN_PROGRESS_FRAMES.length]);
 			else icon = theme.fg("dim", "○");
 
@@ -415,7 +424,7 @@ export default function (pi: ExtensionAPI) {
 					let listText = theme.fg("muted", `${details.todos.length} todo(s):`);
 					const display = expanded ? details.todos : details.todos.slice(0, 5);
 					for (const todo of display) {
-						const icon = todo.state === "done" ? theme.fg("success", "✓") : todo.state === "failed" ? theme.fg("error", "✗") : theme.fg("dim", "○");
+						const icon = todo.state === "done" ? green(DONE_ICON) : todo.state === "failed" ? theme.fg("error", FAILED_ICON) : theme.fg("dim", "○");
 						const itemText = todo.state === "done" ? theme.fg("dim", todo.text) : todo.state === "failed" ? theme.fg("error", todo.text) : theme.fg("muted", todo.text);
 						listText += `\n${icon} ${theme.fg("accent", `#${todo.id}`)} ${itemText}`;
 					}
@@ -425,8 +434,8 @@ export default function (pi: ExtensionAPI) {
 
 				case "add": {
 					const added = details.added ?? [];
-					if (added.length === 0) return new Text(theme.fg("success", "✓ Added todos"), 0, 0);
-					let text = theme.fg("success", `✓ Added ${added.length} todo(s)`);
+					if (added.length === 0) return new Text(green(DONE_ICON) + theme.fg("success", " Added todos"), 0, 0);
+					let text = green(DONE_ICON) + theme.fg("success", ` Added ${added.length} todo(s)`);
 					const display = expanded ? added : added.slice(0, 5);
 					for (const todo of display) text += `\n${theme.fg("accent", `#${todo.id}`)} ${theme.fg("muted", todo.text)}`;
 					if (!expanded && added.length > 5) text += `\n${theme.fg("dim", `... ${added.length - 5} more`)}`;
@@ -435,17 +444,17 @@ export default function (pi: ExtensionAPI) {
 
 				case "complete": {
 					const todo = details.completed;
-					if (!todo) return new Text(theme.fg("success", "✓ Completed todo"), 0, 0);
+					if (!todo) return new Text(green(DONE_ICON) + theme.fg("success", " Completed todo"), 0, 0);
 					const color = todo.state === "failed" ? "error" : "success";
-					const icon = todo.state === "failed" ? "✗" : "✓";
-					return new Text(theme.fg(color, `${icon} #${todo.id} ${todo.state}`) + " " + theme.fg("muted", todo.text), 0, 0);
+					const icon = todo.state === "failed" ? theme.fg("error", FAILED_ICON) : green(DONE_ICON);
+					return new Text(icon + theme.fg(color, ` #${todo.id} ${todo.state}`) + " " + theme.fg("muted", todo.text), 0, 0);
 				}
 
 				case "clear":
-					return new Text(theme.fg("success", "✓ ") + theme.fg("muted", "Cleared all todos"), 0, 0);
+					return new Text(green(DONE_ICON) + " " + theme.fg("muted", "Cleared all todos"), 0, 0);
 
 				case "toggle":
-					return new Text(theme.fg("success", "✓ Updated todo"), 0, 0);
+					return new Text(green(DONE_ICON) + theme.fg("success", " Updated todo"), 0, 0);
 
 				default: {
 					const text = result.content[0];
