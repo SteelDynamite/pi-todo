@@ -5,6 +5,7 @@
   "type": "module",
   "files": [
     "index.ts",
+    "src",
     "README.md",
     "LICENSE"
   ],
@@ -26,8 +27,9 @@
   },
   "scripts": {
     "typecheck": "tsc --noEmit",
+    "test": "node --test --experimental-strip-types tests/*.test.ts",
     "test:pack": "npm pack --dry-run --json",
-    "validate": "npm run typecheck && npm run test:pack"
+    "validate": "npm run typecheck && npm test && npm run test:pack"
   },
   "keywords": [
     "pi",
@@ -38,17 +40,14 @@
   ],
   "author": "SteelDynamite",
   "license": "MIT",
-  "peerDependencies": {
-    "@earendil-works/pi-ai": "*",
-    "@earendil-works/pi-coding-agent": "*",
-    "@earendil-works/pi-tui": "*",
-    "typebox": "*"
-  },
-  "devDependencies": {
+  "dependencies": {
     "@earendil-works/pi-ai": "^0.78.0",
     "@earendil-works/pi-coding-agent": "^0.78.0",
     "@earendil-works/pi-tui": "^0.78.0",
-    "typebox": "^1.1.38",
+    "typebox": "^1.1.38"
+  },
+  "devDependencies": {
+    "@types/node": "^25.9.1",
     "typescript": "^5.9.3"
   }
 }

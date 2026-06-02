@@ -8,87 +8,59 @@
  */
 
 import { StringEnum } from "@earendil-works/pi-ai";
-import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { Text, truncateToWidth } from "@earendil-works/pi-tui";
-import { Type } from "typebox";
+import type { ExtensionAPI, ExtensionContext, ExtensionUIContext, Theme } from "@earendil-works/pi-coding-agent";
+import { Text, truncateToWidth, type Component, type TUI } from "@earendil-works/pi-tui";
+import { Type, type Static } from "typebox";
+import {
+	addTodos,
+	clearTodos,
+	completeTodo,
+	createTodoModel,
+	isTerminal,
+	isTodoAction,
+	reconstructTodoModelFromBranch,
+	snapshot,
+	type Todo,
+	type TodoDetails,
+	type TodoModel,
+} from "./src/todo-core.ts";
+import { green, IN_PROGRESS_FRAMES, DONE_ICON, FAILED_ICON, todoIcon, todoResultText, todoSummary, todoText } from "./src/todo-format.ts";
 
-type TodoState = "pending" | "done" | "failed";
-type TodoAction = "list" | "add" | "complete" | "clear";
-
-interface Todo {
-	id: number;
-	text: string;
-	state: TodoState;
-}
-
-interface TodoDetails {
-	action: TodoAction | "toggle";
-	todos: Todo[];
-	nextId: number;
-	added?: Todo[];
-	completed?: Todo;
-	error?: string;
-}
-
-type LegacyTodo = Partial<Todo> & { id?: number; text?: string; done?: boolean };
-
-type Theme = {
-	fg(color: string, text: string): string;
-	strikethrough(text: string): string;
-};
-
-type WidgetTui = { terminal: { columns: number }; requestRender(): void };
-
-type UICtx = {
-	setWidget(
-		key: string,
-		content: undefined | ((tui: WidgetTui, theme: Theme) => { render(): string[]; invalidate(): void }),
-		options?: { placement?: "aboveEditor" | "belowEditor" },
-	): void;
-};
-
-const TodoParams = Type.Object({
-	action: StringEnum(["list", "add", "complete", "clear"] as const),
-	items: Type.Optional(Type.Array(Type.String(), { description: "Todo texts to add. Required for add; an array of one is valid.", minItems: 1 })),
-	replace: Type.Optional(Type.Boolean({ description: "For add: replace the current list instead of appending to it" })),
-	id: Type.Optional(Type.Number({ description: "Todo ID (for complete)" })),
-	state: Type.Optional(StringEnum(["done", "failed"] as const, { description: "Completion state for complete" })),
+const ListParams = Type.Object({ action: StringEnum(["list"] as const) });
+const ClearParams = Type.Object({ action: StringEnum(["clear"] as const) });
+const AddParams = Type.Object({
+	action: StringEnum(["add"] as const),
+	items: Type.Array(Type.String(), { description: "Todo texts to add. An array of one is valid.", minItems: 1 }),
+	replace: Type.Optional(Type.Boolean({ description: "Replace the current list instead of appending" })),
 });
+const CompleteParams = Type.Object({
+	action: StringEnum(["complete"] as const),
+	id: Type.Integer({ description: "Todo ID" }),
+	state: StringEnum(["done", "failed"] as const, { description: "Completion state" }),
+});
+const TodoParams = Type.Union([ListParams, AddParams, CompleteParams, ClearParams]);
+type TodoParams = Static<typeof TodoParams>;
 
 const MAX_VISIBLE_TODOS = 10;
-const IN_PROGRESS_FRAMES = ["▹", "▸", "▶", "▸"];
-const DONE_ICON = "✓";
-const FAILED_ICON = "✗";
-const GREEN_FG = "\x1b[32m";
-const RESET_FG = "\x1b[39m";
 const AUTO_HIDE_AFTER_TURNS = 4;
 
-/** Force terminal-green for completed checkmarks, independent of theme success color. */
-function green(text: string): string {
-	return `${GREEN_FG}${text}${RESET_FG}`;
+function isCurrentTodo(todo: unknown): todo is Todo {
+	const item = todo as Partial<Todo> | undefined;
+	return !!item && Number.isInteger(item.id) && typeof item.text === "string" && (item.state === "pending" || item.state === "done" || item.state === "failed");
 }
 
-function normalizeTodo(todo: LegacyTodo): Todo | undefined {
-	if (typeof todo.id !== "number" || typeof todo.text !== "string") return undefined;
-	const state: TodoState = todo.state === "done" || todo.state === "failed" || todo.state === "pending"
-		? todo.state
-		: todo.done
-			? "done"
-			: "pending";
-	return { id: todo.id, text: todo.text, state };
-}
-
-function cloneTodos(todos: Todo[]): Todo[] {
-	return todos.map((todo) => ({ ...todo }));
-}
-
-function isTerminal(todo: Todo): boolean {
-	return todo.state === "done" || todo.state === "failed";
+function renderableDetails(details: unknown): TodoDetails | undefined {
+	const value = details as Partial<TodoDetails> | undefined;
+	if (!value || !isTodoAction(value.action) || !Array.isArray(value.todos) || typeof value.nextId !== "number") return undefined;
+	if (!value.todos.every(isCurrentTodo)) return undefined;
+	if (value.added && !value.added.every(isCurrentTodo)) return undefined;
+	if (value.completed && !isCurrentTodo(value.completed)) return undefined;
+	return value as TodoDetails;
 }
 
 class TodoWidget {
-	private uiCtx: UICtx | undefined;
-	private tui: WidgetTui | undefined;
+	private uiCtx: ExtensionUIContext | undefined;
+	private tui: TUI | undefined;
 	private widgetRegistered = false;
 	private frame = 0;
 	private interval: ReturnType<typeof setInterval> | undefined;
@@ -99,7 +71,7 @@ class TodoWidget {
 		private isHidden: () => boolean,
 	) {}
 
-	setUICtx(ctx: UICtx): void {
+	setUICtx(ctx: ExtensionUIContext): void {
 		this.uiCtx = ctx;
 	}
 
@@ -126,9 +98,9 @@ class TodoWidget {
 		if (!this.widgetRegistered) {
 			this.uiCtx.setWidget(
 				"todo",
-				(tui, theme) => {
+				(tui, theme): Component => {
 					this.tui = tui;
-					return { render: () => this.renderWidget(tui, theme), invalidate: () => {} };
+					return { render: (width: number) => this.renderWidget(width, theme), invalidate: () => {} };
 				},
 				{ placement: "aboveEditor" },
 			);
@@ -143,7 +115,7 @@ class TodoWidget {
 	dispose(): void {
 		if (this.interval) clearInterval(this.interval);
 		this.interval = undefined;
-		if (this.uiCtx) this.uiCtx.setWidget("todo", undefined);
+		this.uiCtx?.setWidget("todo", undefined);
 		this.widgetRegistered = false;
 		this.tui = undefined;
 	}
@@ -162,31 +134,18 @@ class TodoWidget {
 		}
 	}
 
-	private renderWidget(tui: WidgetTui, theme: Theme): string[] {
+	private renderWidget(width: number, theme: Theme): string[] {
 		const todos = this.getTodos();
 		if (todos.length === 0 || this.isHidden()) return [];
 
-		const width = tui.terminal.columns;
-		const done = todos.filter((todo) => todo.state === "done").length;
-		const failed = todos.filter((todo) => todo.state === "failed").length;
-		const pending = todos.length - done - failed;
-		const lines = [truncateToWidth(theme.fg("accent", `● ${todos.length} todo(s), ${done} done, ${failed} failed, ${pending} pending`), width)];
+		const lines = [truncateToWidth(theme.fg("accent", todoSummary(todos)), width)];
 		const impliedActiveId = this.agentActive ? todos.find((todo) => !isTerminal(todo))?.id : undefined;
 
 		for (const todo of todos.slice(0, MAX_VISIBLE_TODOS)) {
 			const isImpliedActive = todo.id === impliedActiveId;
-			let icon: string;
-			if (todo.state === "done") icon = green(DONE_ICON);
-			else if (todo.state === "failed") icon = theme.fg("error", FAILED_ICON);
-			else if (isImpliedActive) icon = theme.fg("accent", IN_PROGRESS_FRAMES[this.frame % IN_PROGRESS_FRAMES.length]);
-			else icon = theme.fg("dim", "○");
-
+			const activeFrame = isImpliedActive ? IN_PROGRESS_FRAMES[this.frame % IN_PROGRESS_FRAMES.length] : undefined;
 			const id = theme.fg("dim", `#${todo.id}`);
-			let text = todo.text;
-			if (todo.state === "done") text = theme.fg("dim", theme.strikethrough(todo.text));
-			else if (todo.state === "failed") text = theme.fg("error", todo.text);
-			else if (isImpliedActive) text = theme.fg("accent", `${todo.text}…`);
-			lines.push(truncateToWidth(`  ${icon} ${id} ${text}`, width));
+			lines.push(truncateToWidth(`  ${todoIcon(todo, theme, activeFrame)} ${id} ${todoText(todo, theme, isImpliedActive)}`, width));
 		}
 
 		if (todos.length > MAX_VISIBLE_TODOS) {
@@ -198,14 +157,13 @@ class TodoWidget {
 }
 
 export default function (pi: ExtensionAPI) {
-	let todos: Todo[] = [];
-	let nextId = 1;
+	let model: TodoModel = createTodoModel();
 	let currentTurn = 0;
 	let allTerminalSinceTurn: number | undefined;
 	let widgetHidden = false;
-	const widget = new TodoWidget(() => todos, () => widgetHidden);
+	const widget = new TodoWidget(() => model.todos, () => widgetHidden);
 
-	const allTodosTerminal = () => todos.length > 0 && todos.every(isTerminal);
+	const allTodosTerminal = () => model.todos.length > 0 && model.todos.every(isTerminal);
 
 	const refreshAutoHideState = () => {
 		if (!allTodosTerminal()) {
@@ -217,34 +175,15 @@ export default function (pi: ExtensionAPI) {
 		if (currentTurn - allTerminalSinceTurn >= AUTO_HIDE_AFTER_TURNS) widgetHidden = true;
 	};
 
-	const snapshot = (action: TodoDetails["action"], extra: Partial<TodoDetails> = {}): TodoDetails => ({
-		action,
-		todos: cloneTodos(todos),
-		nextId,
-		...extra,
-	});
+	const todoSnapshot = (action: TodoDetails["action"], extra: Partial<TodoDetails> = {}): TodoDetails => snapshot(model, action, extra);
 
 	const reconstructState = (ctx: ExtensionContext) => {
-		todos = [];
-		nextId = 1;
-
-		for (const entry of ctx.sessionManager.getBranch()) {
-			if (entry.type !== "message") continue;
-			const msg = entry.message;
-			if (msg.role !== "toolResult" || msg.toolName !== "todo") continue;
-
-			const details = msg.details as Partial<TodoDetails> | undefined;
-			if (Array.isArray(details?.todos)) {
-				todos = details.todos.map(normalizeTodo).filter((todo): todo is Todo => !!todo);
-				if (typeof details.nextId === "number") nextId = details.nextId;
-				else nextId = Math.max(1, ...todos.map((todo) => todo.id + 1));
-			}
-		}
+		model = reconstructTodoModelFromBranch(ctx.sessionManager.getBranch());
 		refreshAutoHideState();
 	};
 
 	pi.on("session_start", async (_event, ctx) => {
-		widget.setUICtx(ctx.ui as UICtx);
+		widget.setUICtx(ctx.ui);
 		currentTurn = 0;
 		allTerminalSinceTurn = undefined;
 		widgetHidden = false;
@@ -253,23 +192,23 @@ export default function (pi: ExtensionAPI) {
 	});
 
 	pi.on("session_tree", async (_event, ctx) => {
-		widget.setUICtx(ctx.ui as UICtx);
+		widget.setUICtx(ctx.ui);
 		reconstructState(ctx);
 		widget.update();
 	});
 
 	pi.on("before_agent_start", async (_event, ctx) => {
-		widget.setUICtx(ctx.ui as UICtx);
+		widget.setUICtx(ctx.ui);
 		widget.update();
 	});
 
 	pi.on("agent_start", async (_event, ctx) => {
-		widget.setUICtx(ctx.ui as UICtx);
+		widget.setUICtx(ctx.ui);
 		widget.setAgentActive(true);
 	});
 
 	pi.on("turn_start", async (_event, ctx) => {
-		widget.setUICtx(ctx.ui as UICtx);
+		widget.setUICtx(ctx.ui);
 		currentTurn++;
 		refreshAutoHideState();
 		widget.update();
@@ -285,10 +224,10 @@ export default function (pi: ExtensionAPI) {
 		widget.dispose();
 	});
 
-	pi.registerTool({
+	pi.registerTool<typeof TodoParams, TodoDetails>({
 		name: "todo",
 		label: "Todo",
-		description: "Manage a todo list. Actions: list, add (items array, replace boolean), complete (id, state done/failed), clear",
+		description: "Manage a todo list. Actions: list, add (items array, replace boolean), complete (integer id, state done/failed), clear",
 		promptSnippet: "List, add, complete, fail, or clear todos in the current branch-aware todo list",
 		promptGuidelines: [
 			"Use todo to track multi-step work when a lightweight checklist would help.",
@@ -301,7 +240,7 @@ export default function (pi: ExtensionAPI) {
 		parameters: TodoParams,
 
 		async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
-			widget.setUICtx(ctx.ui as UICtx);
+			widget.setUICtx(ctx.ui);
 
 			switch (params.action) {
 				case "list": {
@@ -311,34 +250,17 @@ export default function (pi: ExtensionAPI) {
 						content: [
 							{
 								type: "text" as const,
-								text: todos.length
-									? todos.map((todo) => `[${todo.state}] #${todo.id}: ${todo.text}`).join("\n")
+								text: model.todos.length
+									? model.todos.map((todo) => `[${todo.state}] #${todo.id}: ${todo.text}`).join("\n")
 									: "No todos",
 							},
 						],
-						details: snapshot("list"),
+						details: todoSnapshot("list"),
 					};
 				}
 
 				case "add": {
-					if (!Array.isArray(params.items) || params.items.length === 0) {
-						return {
-							content: [{ type: "text" as const, text: "Error: items array required for add" }],
-							details: snapshot("add", { error: "items array required" }),
-						};
-					}
-
-					if (params.replace) {
-						todos = [];
-						nextId = 1;
-					}
-
-					const added = params.items.map((text) => {
-						const todo: Todo = { id: nextId++, text, state: "pending" };
-						todos.push(todo);
-						return todo;
-					});
-
+					const added = addTodos(model, params.items, params.replace);
 					allTerminalSinceTurn = undefined;
 					widgetHidden = false;
 					widget.update();
@@ -351,49 +273,34 @@ export default function (pi: ExtensionAPI) {
 								text: `${verb} ${added.length} ${noun}:\n${added.map((todo) => `#${todo.id}: ${todo.text}`).join("\n")}`,
 							},
 						],
-						details: snapshot("add", { added: cloneTodos(added) }),
+						details: todoSnapshot("add", { added }),
 					};
 				}
 
 				case "complete": {
-					if (params.id === undefined) {
-						return {
-							content: [{ type: "text" as const, text: "Error: id required for complete" }],
-							details: snapshot("complete", { error: "id required" }),
-						};
-					}
-					if (params.state !== "done" && params.state !== "failed") {
-						return {
-							content: [{ type: "text" as const, text: "Error: state must be done or failed" }],
-							details: snapshot("complete", { error: "state must be done or failed" }),
-						};
-					}
-					const todo = todos.find((item) => item.id === params.id);
-					if (!todo) {
+					const completed = completeTodo(model, params.id, params.state);
+					if (!completed) {
 						return {
 							content: [{ type: "text" as const, text: `Todo #${params.id} not found` }],
-							details: snapshot("complete", { error: `#${params.id} not found` }),
+							details: todoSnapshot("complete", { error: `#${params.id} not found` }),
 						};
 					}
-					todo.state = params.state;
 					refreshAutoHideState();
 					widget.update();
 					return {
-						content: [{ type: "text" as const, text: `Todo #${todo.id} marked ${todo.state}` }],
-						details: snapshot("complete", { completed: { ...todo } }),
+						content: [{ type: "text" as const, text: `Todo #${completed.id} marked ${completed.state}` }],
+						details: todoSnapshot("complete", { completed }),
 					};
 				}
 
 				case "clear": {
-					const count = todos.length;
-					todos = [];
-					nextId = 1;
+					const count = clearTodos(model);
 					allTerminalSinceTurn = undefined;
 					widgetHidden = false;
 					widget.update();
 					return {
 						content: [{ type: "text" as const, text: `Cleared ${count} todos` }],
-						details: snapshot("clear"),
+						details: todoSnapshot("clear"),
 					};
 				}
 			}
@@ -401,16 +308,16 @@ export default function (pi: ExtensionAPI) {
 
 		renderCall(args, theme, _context) {
 			let text = theme.fg("toolTitle", theme.bold("todo ")) + theme.fg("muted", args.action);
-			if (Array.isArray(args.items)) text += ` ${theme.fg("dim", `${args.items.length} item(s)`)}`;
-			if (args.replace) text += ` ${theme.fg("warning", "replace")}`;
-			if (args.id !== undefined) text += ` ${theme.fg("accent", `#${args.id}`)}`;
-			if (args.state) text += ` ${theme.fg(args.state === "failed" ? "error" : "success", args.state)}`;
+			if ("items" in args && Array.isArray(args.items)) text += ` ${theme.fg("dim", `${args.items.length} item(s)`)}`;
+			if ("replace" in args && args.replace) text += ` ${theme.fg("warning", "replace")}`;
+			if ("id" in args && args.id !== undefined) text += ` ${theme.fg("accent", `#${args.id}`)}`;
+			if ("state" in args && args.state) text += ` ${theme.fg(args.state === "failed" ? "error" : "success", args.state)}`;
 			return new Text(text, 0, 0);
 		},
 
 		renderResult(result, { expanded }, theme, _context) {
-			const details = result.details as TodoDetails | undefined;
-			if (!details?.action) {
+			const details = renderableDetails(result.details);
+			if (!details) {
 				const text = result.content[0];
 				return new Text(text?.type === "text" ? text.text : "", 0, 0);
 			}
@@ -425,9 +332,7 @@ export default function (pi: ExtensionAPI) {
 					let listText = theme.fg("muted", `${details.todos.length} todo(s):`);
 					const display = expanded ? details.todos : details.todos.slice(0, 5);
 					for (const todo of display) {
-						const icon = todo.state === "done" ? green(DONE_ICON) : todo.state === "failed" ? theme.fg("error", FAILED_ICON) : theme.fg("dim", "○");
-						const itemText = todo.state === "done" ? theme.fg("dim", todo.text) : todo.state === "failed" ? theme.fg("error", todo.text) : theme.fg("muted", todo.text);
-						listText += `\n${icon} ${theme.fg("accent", `#${todo.id}`)} ${itemText}`;
+						listText += `\n${todoIcon(todo, theme)} ${theme.fg("accent", `#${todo.id}`)} ${todoResultText(todo, theme)}`;
 					}
 					if (!expanded && details.todos.length > 5) listText += `\n${theme.fg("dim", `... ${details.todos.length - 5} more`)}`;
 					return new Text(listText, 0, 0);
@@ -453,14 +358,6 @@ export default function (pi: ExtensionAPI) {
 
 				case "clear":
 					return new Text(green(DONE_ICON) + " " + theme.fg("muted", "Cleared all todos"), 0, 0);
-
-				case "toggle":
-					return new Text(green(DONE_ICON) + theme.fg("success", " Updated todo"), 0, 0);
-
-				default: {
-					const text = result.content[0];
-					return new Text(text?.type === "text" ? text.text : "", 0, 0);
-				}
 			}
 		},
 	});
