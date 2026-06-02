@@ -26,19 +26,13 @@ import {
 } from "./src/todo-core.ts";
 import { green, IN_PROGRESS_FRAMES, DONE_ICON, FAILED_ICON, todoIcon, todoResultText, todoSummary, todoText } from "./src/todo-format.ts";
 
-const ListParams = Type.Object({ action: StringEnum(["list"] as const) });
-const ClearParams = Type.Object({ action: StringEnum(["clear"] as const) });
-const AddParams = Type.Object({
-	action: StringEnum(["add"] as const),
-	items: Type.Array(Type.String(), { description: "Todo texts to add. An array of one is valid.", minItems: 1 }),
-	replace: Type.Optional(Type.Boolean({ description: "Replace the current list instead of appending" })),
+const TodoParams = Type.Object({
+	action: StringEnum(["list", "add", "complete", "clear"] as const),
+	items: Type.Optional(Type.Array(Type.String(), { description: "Todo texts to add. Required for add; an array of one is valid.", minItems: 1 })),
+	replace: Type.Optional(Type.Boolean({ description: "For add: replace the current list instead of appending" })),
+	id: Type.Optional(Type.Integer({ description: "Todo ID. Required for complete." })),
+	state: Type.Optional(StringEnum(["done", "failed"] as const, { description: "Completion state. Required for complete." })),
 });
-const CompleteParams = Type.Object({
-	action: StringEnum(["complete"] as const),
-	id: Type.Integer({ description: "Todo ID" }),
-	state: StringEnum(["done", "failed"] as const, { description: "Completion state" }),
-});
-const TodoParams = Type.Union([ListParams, AddParams, CompleteParams, ClearParams]);
 type TodoParams = Static<typeof TodoParams>;
 
 const MAX_VISIBLE_TODOS = 10;
@@ -260,6 +254,12 @@ export default function (pi: ExtensionAPI) {
 				}
 
 				case "add": {
+					if (!params.items) {
+						return {
+							content: [{ type: "text" as const, text: "Error: items array required for add" }],
+							details: todoSnapshot("add", { error: "items array required" }),
+						};
+					}
 					const added = addTodos(model, params.items, params.replace);
 					allTerminalSinceTurn = undefined;
 					widgetHidden = false;
@@ -278,6 +278,18 @@ export default function (pi: ExtensionAPI) {
 				}
 
 				case "complete": {
+					if (params.id === undefined) {
+						return {
+							content: [{ type: "text" as const, text: "Error: id required for complete" }],
+							details: todoSnapshot("complete", { error: "id required" }),
+						};
+					}
+					if (!params.state) {
+						return {
+							content: [{ type: "text" as const, text: "Error: state required for complete" }],
+							details: todoSnapshot("complete", { error: "state required" }),
+						};
+					}
 					const completed = completeTodo(model, params.id, params.state);
 					if (!completed) {
 						return {
