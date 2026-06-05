@@ -37,6 +37,14 @@ type TodoParams = Static<typeof TodoParams>;
 
 const MAX_VISIBLE_TODOS = 10;
 const AUTO_HIDE_AFTER_TURNS = 4;
+type PiMode = "tui" | "rpc" | "json" | "print";
+
+function getContextMode(ctx: ExtensionContext): PiMode | undefined {
+	const mode = (ctx as ExtensionContext & { mode?: unknown }).mode;
+	if (mode === "tui" || mode === "rpc" || mode === "json" || mode === "print") return mode;
+	if (!ctx.hasUI) return undefined;
+	return "tui";
+}
 
 function isCurrentTodo(todo: unknown): todo is Todo {
 	const item = todo as Partial<Todo> | undefined;
@@ -60,10 +68,13 @@ class TodoWidget {
 	private interval: ReturnType<typeof setInterval> | undefined;
 	private agentActive = false;
 
-	constructor(
-		private getTodos: () => Todo[],
-		private isHidden: () => boolean,
-	) {}
+	private getTodos: () => Todo[];
+	private isHidden: () => boolean;
+
+	constructor(getTodos: () => Todo[], isHidden: () => boolean) {
+		this.getTodos = getTodos;
+		this.isHidden = isHidden;
+	}
 
 	setUICtx(ctx: ExtensionUIContext): void {
 		this.uiCtx = ctx;
@@ -115,6 +126,14 @@ class TodoWidget {
 	}
 
 	private syncTimer(): void {
+		if (!this.uiCtx) {
+			if (this.interval) {
+				clearInterval(this.interval);
+				this.interval = undefined;
+			}
+			return;
+		}
+
 		const hasImpliedActiveTodo = this.getTodos().some((todo) => !isTerminal(todo));
 		const shouldAnimate = this.agentActive && hasImpliedActiveTodo && !this.isHidden();
 		if (shouldAnimate && !this.interval) {
@@ -176,42 +195,49 @@ export default function (pi: ExtensionAPI) {
 		refreshAutoHideState();
 	};
 
-	pi.on("session_start", async (_event, ctx) => {
+	const updateWidget = (ctx: ExtensionContext) => {
+		if (getContextMode(ctx) !== "tui") return;
 		widget.setUICtx(ctx.ui);
+		widget.update();
+	};
+
+	const setWidgetAgentActive = (ctx: ExtensionContext, active: boolean) => {
+		if (getContextMode(ctx) !== "tui") return;
+		widget.setUICtx(ctx.ui);
+		widget.setAgentActive(active);
+	};
+
+	pi.on("session_start", async (_event, ctx) => {
 		currentTurn = 0;
 		allTerminalSinceTurn = undefined;
 		widgetHidden = false;
 		reconstructState(ctx);
-		widget.update();
+		updateWidget(ctx);
 	});
 
 	pi.on("session_tree", async (_event, ctx) => {
-		widget.setUICtx(ctx.ui);
 		reconstructState(ctx);
-		widget.update();
+		updateWidget(ctx);
 	});
 
 	pi.on("before_agent_start", async (_event, ctx) => {
-		widget.setUICtx(ctx.ui);
-		widget.update();
+		updateWidget(ctx);
 	});
 
 	pi.on("agent_start", async (_event, ctx) => {
-		widget.setUICtx(ctx.ui);
-		widget.setAgentActive(true);
+		setWidgetAgentActive(ctx, true);
 	});
 
 	pi.on("turn_start", async (_event, ctx) => {
-		widget.setUICtx(ctx.ui);
 		currentTurn++;
 		refreshAutoHideState();
-		widget.update();
+		updateWidget(ctx);
 	});
 
-	pi.on("agent_end", async () => {
-		widget.setAgentActive(false);
+	pi.on("agent_end", async (_event, ctx) => {
+		setWidgetAgentActive(ctx, false);
 		refreshAutoHideState();
-		widget.update();
+		updateWidget(ctx);
 	});
 
 	pi.on("session_shutdown", async () => {
@@ -234,12 +260,10 @@ export default function (pi: ExtensionAPI) {
 		parameters: TodoParams,
 
 		async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
-			widget.setUICtx(ctx.ui);
-
 			switch (params.action) {
 				case "list": {
 					widgetHidden = false;
-					widget.update();
+					updateWidget(ctx);
 					return {
 						content: [
 							{
@@ -263,7 +287,7 @@ export default function (pi: ExtensionAPI) {
 					const added = addTodos(model, params.items, params.replace);
 					allTerminalSinceTurn = undefined;
 					widgetHidden = false;
-					widget.update();
+					updateWidget(ctx);
 					const noun = added.length === 1 ? "todo" : "todos";
 					const verb = params.replace ? "Replaced list and added" : "Added";
 					return {
@@ -298,7 +322,7 @@ export default function (pi: ExtensionAPI) {
 						};
 					}
 					refreshAutoHideState();
-					widget.update();
+					updateWidget(ctx);
 					return {
 						content: [{ type: "text" as const, text: `Todo #${completed.id} marked ${completed.state}` }],
 						details: todoSnapshot("complete", { completed }),
@@ -309,7 +333,7 @@ export default function (pi: ExtensionAPI) {
 					const count = clearTodos(model);
 					allTerminalSinceTurn = undefined;
 					widgetHidden = false;
-					widget.update();
+					updateWidget(ctx);
 					return {
 						content: [{ type: "text" as const, text: `Cleared ${count} todos` }],
 						details: todoSnapshot("clear"),

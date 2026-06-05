@@ -37,9 +37,9 @@ Examples:
 
 Use `replace: true` for a fresh plan when the old list is obsolete. Omit it to append follow-up work.
 
-Todos appear automatically in a widget above the editor when the list is non-empty. The top pending todo animates while the agent is active, then returns to pending when waiting for user input. If all todos are done or failed for 4 turns, the widget hides without deleting the todos.
+In TUI mode, todos appear automatically in a widget above the editor when the list is non-empty. The top pending todo animates while the agent is active, then returns to pending when waiting for user input. If all todos are done or failed for 4 turns, the widget hides without deleting the todos. In RPC/Paseo, JSON, and print modes, the todo tool remains available but widget and animation work is skipped.
 
-Todo state is stored in pi session tool-result details, so it survives reload/resume and follows session branches correctly. The widget auto-hide timer itself is process-local UI state; after reload/resume/tree navigation, hidden completed lists may be shown again until the timer runs again.
+Todo state is stored in pi session tool-result details, so it survives reload/resume and follows session branches correctly. The widget auto-hide timer itself is process-local TUI state; after reload/resume/tree navigation, hidden completed lists may be shown again until the timer runs again.
 
 ## Development
 
