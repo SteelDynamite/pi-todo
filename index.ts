@@ -157,11 +157,7 @@ class TodoWidget {
 		const todos = this.isHidden() ? [] : this.getTodos();
 		if (!title && todos.length === 0) return [];
 
-		const header = title
-			? todos.length > 0
-				? `${theme.fg("accent", theme.bold(title))} ${theme.fg("dim", `· ${todoSummary(todos)}`)}`
-				: theme.fg("accent", theme.bold(title))
-			: theme.fg("accent", todoSummary(todos));
+		const header = title ? theme.fg("accent", theme.bold(`● ${title}`)) : theme.fg("accent", todoSummary(todos));
 		const lines = [truncateToWidth(header, width)];
 		const impliedActiveId = this.agentActive ? todos.find((todo) => !isTerminal(todo))?.id : undefined;
 

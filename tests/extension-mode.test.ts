@@ -89,7 +89,7 @@ describe("mode-specific widget behavior", () => {
 
 		const factory = harness.setWidgetCalls[0]?.[1] as (tui: unknown, theme: unknown) => { render: (width: number) => string[] };
 		const component = factory({ requestRender() {} }, { fg: (_color: string, text: string) => text, bold: (text: string) => text, strikethrough: (text: string) => text });
-		assert.deepEqual(component.render(80), ["Plan A"]);
+		assert.deepEqual(component.render(80), ["● Plan A"]);
 	});
 
 	it("restores title and session name from branch state", async () => {
@@ -100,6 +100,6 @@ describe("mode-specific widget behavior", () => {
 		assert.equal(harness.setWidgetCalls.length, 1);
 		const factory = harness.setWidgetCalls[0]?.[1] as (tui: unknown, theme: unknown) => { render: (width: number) => string[] };
 		const component = factory({ requestRender() {} }, { fg: (_color: string, text: string) => text, bold: (text: string) => text, strikethrough: (text: string) => text });
-		assert.deepEqual(component.render(80), ["Restored Plan"]);
+		assert.deepEqual(component.render(80), ["● Restored Plan"]);
 	});
 });
