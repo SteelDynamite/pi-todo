@@ -36,13 +36,32 @@ describe("todo actions", () => {
 		assert.deepEqual(model, { todos: [], nextId: 1 });
 	});
 
+	it("preserves title across add, replace, clear, and snapshots", () => {
+		const model = createTodoModel();
+
+		addTodos(model, ["one"], true, "Plan A");
+		assert.equal(model.title, "Plan A");
+
+		addTodos(model, ["two"]);
+		assert.equal(model.title, "Plan A");
+
+		addTodos(model, ["fresh"], true);
+		assert.equal(model.title, "Plan A");
+
+		clearTodos(model);
+		assert.equal(model.title, "Plan A");
+		assert.equal(snapshot(model, "clear").title, "Plan A");
+	});
+
 	it("snapshots clone mutable state", () => {
 		const model = createTodoModel();
-		const added = addTodos(model, ["one"]);
+		const added = addTodos(model, ["one"], false, "Plan A");
 		const details = snapshot(model, "add", { added });
 		model.todos[0]!.text = "mutated";
+		model.title = "mutated title";
 		added[0]!.text = "also mutated";
 
+		assert.equal(details.title, "Plan A");
 		assert.deepEqual(details.todos, [{ id: 1, text: "one", state: "pending" }]);
 		assert.deepEqual(details.added, [{ id: 1, text: "one", state: "pending" }]);
 	});
@@ -54,11 +73,13 @@ describe("branch reconstruction", () => {
 			action: "add",
 			todos: [{ id: 1, text: "main", state: "pending" }],
 			nextId: 2,
+			title: "Main plan",
 		};
 		const branch: TodoDetails = {
 			action: "add",
 			todos: [{ id: 1, text: "branch", state: "done" }],
 			nextId: 2,
+			title: "Branch plan",
 		};
 
 		const model = reconstructTodoModelFromBranch([
@@ -67,7 +88,7 @@ describe("branch reconstruction", () => {
 			toolEntry(branch),
 		]);
 
-		assert.deepEqual(model, { todos: [{ id: 1, text: "branch", state: "done" }], nextId: 2 });
+		assert.deepEqual(model, { todos: [{ id: 1, text: "branch", state: "done" }], nextId: 2, title: "Branch plan" });
 	});
 
 	it("migrates legacy toggle/done details only during reconstruction", () => {

@@ -10,12 +10,14 @@ export interface Todo {
 export interface TodoModel {
 	todos: Todo[];
 	nextId: number;
+	title?: string;
 }
 
 export interface TodoDetails {
 	action: TodoAction;
 	todos: Todo[];
 	nextId: number;
+	title?: string;
 	added?: Todo[];
 	completed?: Todo;
 	error?: string;
@@ -31,10 +33,11 @@ export interface ToolResultBranchEntry {
 }
 
 type StoredTodo = Partial<Todo> & { done?: boolean };
-type StoredTodoDetails = Partial<Omit<TodoDetails, "action" | "todos" | "nextId">> & {
+type StoredTodoDetails = Partial<Omit<TodoDetails, "action" | "todos" | "nextId" | "title">> & {
 	action?: TodoAction | "toggle";
 	todos?: unknown;
 	nextId?: unknown;
+	title?: unknown;
 };
 
 export function createTodoModel(): TodoModel {
@@ -46,7 +49,9 @@ export function cloneTodos(todos: Todo[]): Todo[] {
 }
 
 export function cloneTodoModel(model: TodoModel): TodoModel {
-	return { todos: cloneTodos(model.todos), nextId: model.nextId };
+	return model.title === undefined
+		? { todos: cloneTodos(model.todos), nextId: model.nextId }
+		: { todos: cloneTodos(model.todos), nextId: model.nextId, title: model.title };
 }
 
 export function isTerminal(todo: Todo): boolean {
@@ -74,7 +79,8 @@ function normalizeStoredDetails(details: unknown): TodoModel | undefined {
 	const nextId = typeof stored.nextId === "number" && Number.isInteger(stored.nextId)
 		? stored.nextId
 		: Math.max(1, ...todos.map((todo) => todo.id + 1));
-	return { todos, nextId };
+	const title = typeof stored.title === "string" ? stored.title : undefined;
+	return title === undefined ? { todos, nextId } : { todos, nextId, title };
 }
 
 export function reconstructTodoModelFromBranch(entries: Iterable<ToolResultBranchEntry>): TodoModel {
@@ -92,11 +98,12 @@ export function reconstructTodoModelFromBranch(entries: Iterable<ToolResultBranc
 	return cloneTodoModel(model);
 }
 
-export function addTodos(model: TodoModel, items: string[], replace = false): Todo[] {
+export function addTodos(model: TodoModel, items: string[], replace = false, title?: string): Todo[] {
 	if (replace) {
 		model.todos = [];
 		model.nextId = 1;
 	}
+	if (title !== undefined) model.title = title;
 
 	const added = items.map((text) => {
 		const todo: Todo = { id: model.nextId++, text, state: "pending" };
@@ -122,7 +129,7 @@ export function clearTodos(model: TodoModel): number {
 }
 
 export function snapshot(model: TodoModel, action: TodoAction, extra: Partial<TodoDetails> = {}): TodoDetails {
-	return {
+	const details: TodoDetails = {
 		...extra,
 		action,
 		todos: cloneTodos(model.todos),
@@ -130,4 +137,6 @@ export function snapshot(model: TodoModel, action: TodoAction, extra: Partial<To
 		added: extra.added ? cloneTodos(extra.added) : undefined,
 		completed: extra.completed ? { ...extra.completed } : undefined,
 	};
+	if (model.title !== undefined) details.title = model.title;
+	return details;
 }
