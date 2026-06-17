@@ -8,8 +8,8 @@
  */
 
 import { StringEnum } from "@earendil-works/pi-ai";
-import type { ExtensionAPI, ExtensionContext, ExtensionUIContext, Theme } from "@earendil-works/pi-coding-agent";
 import { Text, truncateToWidth, type Component, type TUI } from "@earendil-works/pi-tui";
+import type { ExtensionAPI, ExtensionContext, ExtensionUIContext, Theme } from "./src/pi-types.ts";
 import { Type, type Static } from "typebox";
 import {
 	addTodos,

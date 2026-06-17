@@ -1,4 +1,4 @@
-import type { Theme } from "@earendil-works/pi-coding-agent";
+import type { Theme } from "./pi-types.ts";
 import type { Todo } from "./todo-core.ts";
 
 export const DONE_ICON = "✓";
