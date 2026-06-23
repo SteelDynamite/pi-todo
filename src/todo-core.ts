@@ -58,6 +58,20 @@ export function isTerminal(todo: Todo): boolean {
 	return todo.state === "done" || todo.state === "failed";
 }
 
+export function pendingBeforeTerminalTodos(todos: Todo[]): Todo[] {
+	const pending: Todo[] = [];
+	let hasLaterTerminal = false;
+	for (let i = todos.length - 1; i >= 0; i--) {
+		const todo = todos[i]!;
+		if (isTerminal(todo)) {
+			hasLaterTerminal = true;
+		} else if (hasLaterTerminal) {
+			pending.unshift({ ...todo });
+		}
+	}
+	return pending;
+}
+
 export function isTodoAction(action: unknown): action is TodoAction {
 	return action === "list" || action === "add" || action === "complete" || action === "clear";
 }

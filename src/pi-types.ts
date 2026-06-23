@@ -32,6 +32,10 @@ type ToolResult<TDetails> = { content: ToolTextContent[]; details: TDetails };
 
 export interface ExtensionAPI {
 	on(event: string, handler: (event: unknown, ctx: ExtensionContext) => unknown | Promise<unknown>): void;
+	sendMessage(
+		message: { customType: string; content: string; display?: boolean; details?: unknown },
+		options?: { deliverAs?: "steer" | "followUp" | "nextTurn"; triggerTurn?: boolean },
+	): void;
 	setSessionName(name: string): void;
 	registerTool<TParamsSchema extends TSchema, TDetails>(definition: {
 		name: string;

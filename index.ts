@@ -18,6 +18,7 @@ import {
 	createTodoModel,
 	isTerminal,
 	isTodoAction,
+	pendingBeforeTerminalTodos,
 	reconstructTodoModelFromBranch,
 	snapshot,
 	type Todo,
@@ -60,6 +61,10 @@ function renderableDetails(details: unknown): TodoDetails | undefined {
 	if (value.added && !value.added.every(isCurrentTodo)) return undefined;
 	if (value.completed && !isCurrentTodo(value.completed)) return undefined;
 	return value as TodoDetails;
+}
+
+function escapeXmlContent(text: string): string {
+	return text.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;");
 }
 
 class TodoWidget {
@@ -181,6 +186,7 @@ export default function (pi: ExtensionAPI) {
 	let currentTurn = 0;
 	let allTerminalSinceTurn: number | undefined;
 	let widgetHidden = false;
+	let lastOrderReminderKey: string | undefined;
 	const widget = new TodoWidget(() => model.todos, () => model.title, () => widgetHidden);
 
 	const allTodosTerminal = () => model.todos.length > 0 && model.todos.every(isTerminal);
@@ -197,12 +203,37 @@ export default function (pi: ExtensionAPI) {
 
 	const todoSnapshot = (action: TodoDetails["action"], extra: Partial<TodoDetails> = {}): TodoDetails => snapshot(model, action, extra);
 
+	const maybeRemindTodoOrder = () => {
+		const pending = pendingBeforeTerminalTodos(model.todos);
+		if (pending.length === 0) {
+			lastOrderReminderKey = undefined;
+			return;
+		}
+
+		const key = model.todos.map((todo) => `${todo.id}:${todo.state}`).join("|");
+		if (key === lastOrderReminderKey) return;
+		lastOrderReminderKey = key;
+
+		const ids = pending.map((todo) => `#${todo.id}`).join(", ");
+		const message = `Pending todo(s) ${ids} appear before later done/failed todo(s). Mark them done or failed, or replace/reorder the todo list so remaining pending todos are at the end.`;
+		pi.sendMessage(
+			{
+				customType: "system-reminder",
+				content: `<system-reminder name="todo-pending-order">\n${escapeXmlContent(message)}\n</system-reminder>`,
+				display: true,
+				details: { name: "todo-pending-order", pendingTodoIds: pending.map((todo) => todo.id), message },
+			},
+			{ deliverAs: "steer", triggerTurn: true },
+		);
+	};
+
 	const restoreSessionName = () => {
 		if (model.title !== undefined) pi.setSessionName(model.title);
 	};
 
 	const reconstructState = (ctx: ExtensionContext) => {
 		model = reconstructTodoModelFromBranch(ctx.sessionManager.getBranch());
+		lastOrderReminderKey = undefined;
 		restoreSessionName();
 		refreshAutoHideState();
 	};
@@ -233,6 +264,7 @@ export default function (pi: ExtensionAPI) {
 	});
 
 	pi.on("before_agent_start", async (_event, ctx) => {
+		lastOrderReminderKey = undefined;
 		updateWidget(ctx);
 	});
 
@@ -250,6 +282,7 @@ export default function (pi: ExtensionAPI) {
 		setWidgetAgentActive(ctx, false);
 		refreshAutoHideState();
 		updateWidget(ctx);
+		maybeRemindTodoOrder();
 	});
 
 	pi.on("session_shutdown", async () => {

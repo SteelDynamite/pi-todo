@@ -13,6 +13,7 @@ function createHarness(mode: Mode, branch: unknown[] = []) {
 	const handlers = new Map<string, Handler[]>();
 	const setWidgetCalls: unknown[][] = [];
 	const setSessionNameCalls: string[] = [];
+	const sendMessageCalls: unknown[][] = [];
 	let tool: { execute: (...args: unknown[]) => Promise<unknown> } | undefined;
 
 	createExtension({
@@ -26,6 +27,9 @@ function createHarness(mode: Mode, branch: unknown[] = []) {
 		},
 		setSessionName(name: string) {
 			setSessionNameCalls.push(name);
+		},
+		sendMessage(...args: unknown[]) {
+			sendMessageCalls.push(args);
 		},
 	} as never);
 
@@ -49,7 +53,7 @@ function createHarness(mode: Mode, branch: unknown[] = []) {
 	}
 
 	assert.ok(tool, "todo tool registered");
-	return { ctx, emit, setSessionNameCalls, setWidgetCalls, tool };
+	return { ctx, emit, sendMessageCalls, setSessionNameCalls, setWidgetCalls, tool };
 }
 
 describe("mode-specific widget behavior", () => {
@@ -101,5 +105,43 @@ describe("mode-specific widget behavior", () => {
 		const factory = harness.setWidgetCalls[0]?.[1] as (tui: unknown, theme: unknown) => { render: (width: number) => string[] };
 		const component = factory({ requestRender() {} }, { fg: (_color: string, text: string) => text, bold: (text: string) => text, strikethrough: (text: string) => text });
 		assert.deepEqual(component.render(80), ["● Restored Plan"]);
+	});
+
+	it("reminds once when pending todos appear before later terminal todos", async () => {
+		const harness = createHarness("json", [toolEntry({
+			action: "complete",
+			nextId: 4,
+			todos: [
+				{ id: 1, text: "done", state: "done" },
+				{ id: 2, text: "stale", state: "pending" },
+				{ id: 3, text: "done later", state: "done" },
+			],
+		})]);
+		await harness.emit("session_start");
+		await harness.emit("agent_end");
+		await harness.emit("agent_end");
+
+		assert.equal(harness.sendMessageCalls.length, 1);
+		assert.match(JSON.stringify(harness.sendMessageCalls[0]), /todo-pending-order/);
+		assert.match(JSON.stringify(harness.sendMessageCalls[0]), /#2/);
+
+		await harness.emit("before_agent_start");
+		await harness.emit("agent_end");
+		assert.equal(harness.sendMessageCalls.length, 2);
+	});
+
+	it("does not remind when pending todos are at the end", async () => {
+		const harness = createHarness("json", [toolEntry({
+			action: "complete",
+			nextId: 3,
+			todos: [
+				{ id: 1, text: "done", state: "done" },
+				{ id: 2, text: "remaining", state: "pending" },
+			],
+		})]);
+		await harness.emit("session_start");
+		await harness.emit("agent_end");
+
+		assert.deepEqual(harness.sendMessageCalls, []);
 	});
 });

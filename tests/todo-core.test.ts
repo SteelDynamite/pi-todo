@@ -5,6 +5,7 @@ import {
 	clearTodos,
 	completeTodo,
 	createTodoModel,
+	pendingBeforeTerminalTodos,
 	reconstructTodoModelFromBranch,
 	snapshot,
 	type TodoDetails,
@@ -64,6 +65,20 @@ describe("todo actions", () => {
 		assert.equal(details.title, "Plan A");
 		assert.deepEqual(details.todos, [{ id: 1, text: "one", state: "pending" }]);
 		assert.deepEqual(details.added, [{ id: 1, text: "one", state: "pending" }]);
+	});
+
+	it("finds pending todos before later terminal todos", () => {
+		assert.deepEqual(pendingBeforeTerminalTodos([
+			{ id: 1, text: "done", state: "done" },
+			{ id: 2, text: "pending", state: "pending" },
+		]), []);
+
+		assert.deepEqual(pendingBeforeTerminalTodos([
+			{ id: 1, text: "done", state: "done" },
+			{ id: 2, text: "stale", state: "pending" },
+			{ id: 3, text: "failed", state: "failed" },
+			{ id: 4, text: "open", state: "pending" },
+		]), [{ id: 2, text: "stale", state: "pending" }]);
 	});
 });
 
