@@ -1,7 +1,6 @@
 ---
 description: Maintains the pi-todo branch-aware todo-list extension
 manifest: true
-model: gpt-5.3-codex-spark
 resumable: true
 ---
 
