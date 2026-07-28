@@ -149,21 +149,35 @@ describe("mode-specific widget behavior", () => {
 		assert.deepEqual(renderedTodoIds(lines), [3, 4, 5, 6, 7, 8, 9, 10, 11, 12]);
 		assert.equal(lines[1], "    … 2 earlier done/failed");
 		assert.equal(lines.some((line) => line.includes("more")), false);
+
+		for (let id = 8; id <= 12; id++) {
+			await harness.tool.execute(`complete-${id}`, { action: "complete", id, state: id % 2 ? "done" : "failed" }, undefined, undefined, harness.ctx);
+			lines = renderWidget(harness);
+			assert.deepEqual(renderedTodoIds(lines), [3, 4, 5, 6, 7, 8, 9, 10, 11, 12]);
+			assert.equal(lines[1], "    … 2 earlier done/failed");
+		}
 	});
 
-	it("stops scrolling at a skipped pending todo", async () => {
+	it("stops at a skipped pending todo before filling and passing the tail", async () => {
 		const harness = createHarness("tui");
 		await harness.emit("session_start");
-		await harness.tool.execute("add", { action: "add", items: Array.from({ length: 12 }, (_, i) => `item ${i + 1}`) }, undefined, undefined, harness.ctx);
-		for (let id = 1; id <= 6; id++) {
+		await harness.tool.execute("add", { action: "add", items: Array.from({ length: 13 }, (_, i) => `item ${i + 1}`) }, undefined, undefined, harness.ctx);
+		for (let id = 1; id <= 7; id++) {
 			await harness.tool.execute(`complete-${id}`, { action: "complete", id, state: id % 2 ? "failed" : "done" }, undefined, undefined, harness.ctx);
 		}
 
-		await harness.tool.execute("complete-8", { action: "complete", id: 8, state: "done" }, undefined, undefined, harness.ctx);
-		const lines = renderWidget(harness);
-		assert.deepEqual(renderedTodoIds(lines), [2, 3, 4, 5, 6, 7, 8, 9, 10, 11]);
-		assert.equal(lines[1], "    … 1 earlier done/failed");
+		await harness.tool.execute("complete-9", { action: "complete", id: 9, state: "done" }, undefined, undefined, harness.ctx);
+		let lines = renderWidget(harness);
+		assert.deepEqual(renderedTodoIds(lines), [3, 4, 5, 6, 7, 8, 9, 10, 11, 12]);
+		assert.equal(lines[1], "    … 2 earlier done/failed");
 		assert.equal(lines.at(-1), "    … and 1 more");
+
+		await harness.tool.execute("complete-8", { action: "complete", id: 8, state: "failed" }, undefined, undefined, harness.ctx);
+		await harness.tool.execute("complete-10", { action: "complete", id: 10, state: "done" }, undefined, undefined, harness.ctx);
+		lines = renderWidget(harness);
+		assert.deepEqual(renderedTodoIds(lines), [4, 5, 6, 7, 8, 9, 10, 11, 12, 13]);
+		assert.equal(lines[1], "    … 3 earlier done/failed");
+		assert.equal(lines.some((line) => line.includes("more")), false);
 	});
 
 	it("reminds once when pending todos appear before later terminal todos", async () => {

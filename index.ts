@@ -167,7 +167,7 @@ class TodoWidget {
 		const impliedActiveId = this.agentActive ? todos.find((todo) => !isTerminal(todo))?.id : undefined;
 		let leadingTerminalCount = 0;
 		while (leadingTerminalCount < todos.length && isTerminal(todos[leadingTerminalCount]!)) leadingTerminalCount++;
-		const start = Math.max(0, leadingTerminalCount - 5);
+		const start = Math.min(Math.max(0, leadingTerminalCount - 5), Math.max(0, todos.length - MAX_VISIBLE_TODOS));
 		const visibleTodos = todos.slice(start, start + MAX_VISIBLE_TODOS);
 
 		if (start > 0) {
