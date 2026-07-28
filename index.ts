@@ -165,16 +165,25 @@ class TodoWidget {
 		const header = title ? theme.fg("accent", theme.bold(`● ${title}`)) : theme.fg("accent", todoSummary(todos));
 		const lines = [truncateToWidth(header, width)];
 		const impliedActiveId = this.agentActive ? todos.find((todo) => !isTerminal(todo))?.id : undefined;
+		let leadingTerminalCount = 0;
+		while (leadingTerminalCount < todos.length && isTerminal(todos[leadingTerminalCount]!)) leadingTerminalCount++;
+		const start = Math.max(0, leadingTerminalCount - 5);
+		const visibleTodos = todos.slice(start, start + MAX_VISIBLE_TODOS);
 
-		for (const todo of todos.slice(0, MAX_VISIBLE_TODOS)) {
+		if (start > 0) {
+			lines.push(truncateToWidth(theme.fg("dim", `    … ${start} earlier done/failed`), width));
+		}
+
+		for (const todo of visibleTodos) {
 			const isImpliedActive = todo.id === impliedActiveId;
 			const activeFrame = isImpliedActive ? IN_PROGRESS_FRAMES[this.frame % IN_PROGRESS_FRAMES.length] : undefined;
 			const id = theme.fg("dim", `#${todo.id}`);
 			lines.push(truncateToWidth(`  ${todoIcon(todo, theme, activeFrame)} ${id} ${todoText(todo, theme, isImpliedActive)}`, width));
 		}
 
-		if (todos.length > MAX_VISIBLE_TODOS) {
-			lines.push(truncateToWidth(theme.fg("dim", `    … and ${todos.length - MAX_VISIBLE_TODOS} more`), width));
+		const remaining = todos.length - start - visibleTodos.length;
+		if (remaining > 0) {
+			lines.push(truncateToWidth(theme.fg("dim", `    … and ${remaining} more`), width));
 		}
 
 		return lines;

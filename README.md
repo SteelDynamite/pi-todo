@@ -39,7 +39,7 @@ Use `replace: true` for a fresh plan when the old list is obsolete. Include `tit
 
 `clear` removes todo items but preserves the title/session name.
 
-In TUI mode, todos appear automatically in a widget above the editor when the list is non-empty or a title exists. When a title exists, the widget header displays `● <title>`. The title remains visible even after todo items are cleared. The top pending todo animates while the agent is active, then returns to pending when waiting for user input. If all todos are done or failed for 4 turns, todo items auto-hide without deleting state; a title, when present, remains visible. In RPC/Paseo, JSON, and print modes, the todo tool remains available but widget and animation work is skipped.
+In TUI mode, todos appear automatically in a widget above the editor when the list is non-empty or a title exists. When a title exists, the widget header displays `● <title>`. The title remains visible even after todo items are cleared. The top pending todo animates while the agent is active, then returns to pending when waiting for user input. The widget retains five leading done/failed items, then scrolls one row per additional leading done/failed item to reveal later work; an earlier pending item blocks scrolling. If all todos are done or failed for 4 turns, todo items auto-hide without deleting state; a title, when present, remains visible. In RPC/Paseo, JSON, and print modes, the todo tool remains available but widget and animation work is skipped.
 
 At the end of an agent loop, if pending todos appear before later done/failed todos, pi-todo injects a `<system-reminder>` asking the agent to mark/reorder them so remaining pending todos stay at the end.
 

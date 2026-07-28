@@ -56,6 +56,24 @@ function createHarness(mode: Mode, branch: unknown[] = []) {
 	return { ctx, emit, sendMessageCalls, setSessionNameCalls, setWidgetCalls, tool };
 }
 
+function renderWidget(harness: ReturnType<typeof createHarness>): string[] {
+	const registration = harness.setWidgetCalls.find((call) => typeof call[1] === "function");
+	assert.ok(registration, "todo widget registered");
+	const factory = registration[1] as (tui: unknown, theme: unknown) => { render: (width: number) => string[] };
+	const component = factory(
+		{ requestRender() {} },
+		{ fg: (_color: string, text: string) => text, bold: (text: string) => text, strikethrough: (text: string) => text },
+	);
+	return component.render(80);
+}
+
+function renderedTodoIds(lines: string[]): number[] {
+	return lines.flatMap((line) => {
+		const match = line.match(/#(\d+)/);
+		return match ? [Number(match[1])] : [];
+	});
+}
+
 describe("mode-specific widget behavior", () => {
 	it("keeps the todo tool usable without widget work in non-TUI modes", async () => {
 		for (const mode of ["rpc", "json", "print"] as const) {
@@ -105,6 +123,47 @@ describe("mode-specific widget behavior", () => {
 		const factory = harness.setWidgetCalls[0]?.[1] as (tui: unknown, theme: unknown) => { render: (width: number) => string[] };
 		const component = factory({ requestRender() {} }, { fg: (_color: string, text: string) => text, bold: (text: string) => text, strikethrough: (text: string) => text });
 		assert.deepEqual(component.render(80), ["● Restored Plan"]);
+	});
+
+	it("reveals later todos after five leading mixed terminal states", async () => {
+		const harness = createHarness("tui");
+		await harness.emit("session_start");
+		await harness.tool.execute("add", { action: "add", items: Array.from({ length: 12 }, (_, i) => `item ${i + 1}`) }, undefined, undefined, harness.ctx);
+
+		for (let id = 1; id <= 5; id++) {
+			await harness.tool.execute(`complete-${id}`, { action: "complete", id, state: id % 2 ? "done" : "failed" }, undefined, undefined, harness.ctx);
+		}
+		let lines = renderWidget(harness);
+		assert.deepEqual(renderedTodoIds(lines), [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
+		assert.equal(lines.some((line) => line.includes("earlier done/failed")), false);
+		assert.equal(lines.at(-1), "    … and 2 more");
+
+		await harness.tool.execute("complete-6", { action: "complete", id: 6, state: "failed" }, undefined, undefined, harness.ctx);
+		lines = renderWidget(harness);
+		assert.deepEqual(renderedTodoIds(lines), [2, 3, 4, 5, 6, 7, 8, 9, 10, 11]);
+		assert.equal(lines[1], "    … 1 earlier done/failed");
+		assert.equal(lines.at(-1), "    … and 1 more");
+
+		await harness.tool.execute("complete-7", { action: "complete", id: 7, state: "done" }, undefined, undefined, harness.ctx);
+		lines = renderWidget(harness);
+		assert.deepEqual(renderedTodoIds(lines), [3, 4, 5, 6, 7, 8, 9, 10, 11, 12]);
+		assert.equal(lines[1], "    … 2 earlier done/failed");
+		assert.equal(lines.some((line) => line.includes("more")), false);
+	});
+
+	it("stops scrolling at a skipped pending todo", async () => {
+		const harness = createHarness("tui");
+		await harness.emit("session_start");
+		await harness.tool.execute("add", { action: "add", items: Array.from({ length: 12 }, (_, i) => `item ${i + 1}`) }, undefined, undefined, harness.ctx);
+		for (let id = 1; id <= 6; id++) {
+			await harness.tool.execute(`complete-${id}`, { action: "complete", id, state: id % 2 ? "failed" : "done" }, undefined, undefined, harness.ctx);
+		}
+
+		await harness.tool.execute("complete-8", { action: "complete", id: 8, state: "done" }, undefined, undefined, harness.ctx);
+		const lines = renderWidget(harness);
+		assert.deepEqual(renderedTodoIds(lines), [2, 3, 4, 5, 6, 7, 8, 9, 10, 11]);
+		assert.equal(lines[1], "    … 1 earlier done/failed");
+		assert.equal(lines.at(-1), "    … and 1 more");
 	});
 
 	it("reminds once when pending todos appear before later terminal todos", async () => {
