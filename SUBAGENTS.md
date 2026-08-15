@@ -1,5 +1,5 @@
 ---
-description: Maintains the pi-todo branch-aware todo-list extension
+description: Owns branch-local todo tool and session-title flows, tool-result persistence/restoration, TUI widget animation/auto-hide, and pending-order reminders; excludes process-global state and widget rendering outside TUI mode.
 manifest: true
 resumable: true
 ---
