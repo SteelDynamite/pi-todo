@@ -40,10 +40,10 @@
   ],
   "author": "SteelDynamite",
   "license": "MIT",
-  "dependencies": {
-    "@earendil-works/pi-ai": "^0.78.0",
-    "@earendil-works/pi-tui": "^0.78.0",
-    "typebox": "^1.1.38"
+  "peerDependencies": {
+    "@earendil-works/pi-ai": "*",
+    "@earendil-works/pi-tui": "*",
+    "typebox": "*"
   },
   "devDependencies": {
     "@types/node": "^25.9.1",
