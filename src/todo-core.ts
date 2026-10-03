@@ -76,7 +76,9 @@ export function isTodoAction(action: unknown): action is TodoAction {
 	return action === "list" || action === "add" || action === "complete" || action === "clear";
 }
 
-function normalizeStoredTodo(todo: StoredTodo): Todo | undefined {
+function normalizeStoredTodo(value: unknown): Todo | undefined {
+	if (!value || typeof value !== "object") return undefined;
+	const todo = value as StoredTodo;
 	if (typeof todo.id !== "number" || !Number.isInteger(todo.id) || typeof todo.text !== "string") return undefined;
 	const state: TodoState = todo.state === "done" || todo.state === "failed" || todo.state === "pending"
 		? todo.state
@@ -89,7 +91,7 @@ function normalizeStoredTodo(todo: StoredTodo): Todo | undefined {
 function normalizeStoredDetails(details: unknown): TodoModel | undefined {
 	const stored = details as StoredTodoDetails | undefined;
 	if (!stored || !Array.isArray(stored.todos)) return undefined;
-	const todos = stored.todos.map((todo) => normalizeStoredTodo(todo as StoredTodo)).filter((todo): todo is Todo => !!todo);
+	const todos = stored.todos.map(normalizeStoredTodo).filter((todo): todo is Todo => !!todo);
 	const nextId = typeof stored.nextId === "number" && Number.isInteger(stored.nextId)
 		? stored.nextId
 		: Math.max(1, ...todos.map((todo) => todo.id + 1));

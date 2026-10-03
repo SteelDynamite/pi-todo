@@ -162,7 +162,7 @@ class TodoWidget {
 		const todos = this.isHidden() ? [] : this.getTodos();
 		if (!title && todos.length === 0) return [];
 
-		const header = title ? theme.fg("accent", theme.bold(`● ${title}`)) : theme.fg("accent", todoSummary(todos));
+		const header = title ? theme.fg("accent", theme.bold(`● ${title.replace(/[\r\n\t]+/g, " ")}`)) : theme.fg("accent", todoSummary(todos));
 		const lines = [truncateToWidth(header, width)];
 		const impliedActiveId = this.agentActive ? todos.find((todo) => !isTerminal(todo))?.id : undefined;
 		let leadingTerminalCount = 0;
@@ -178,7 +178,7 @@ class TodoWidget {
 			const isImpliedActive = todo.id === impliedActiveId;
 			const activeFrame = isImpliedActive ? IN_PROGRESS_FRAMES[this.frame % IN_PROGRESS_FRAMES.length] : undefined;
 			const id = theme.fg("dim", `#${todo.id}`);
-			lines.push(truncateToWidth(`  ${todoIcon(todo, theme, activeFrame)} ${id} ${todoText(todo, theme, isImpliedActive)}`, width));
+			lines.push(truncateToWidth(`  ${todoIcon(todo, theme, activeFrame)} ${id} ${todoText(todo, theme, isImpliedActive).replace(/[\r\n\t]+/g, " ")}`, width));
 		}
 
 		const remaining = todos.length - start - visibleTodos.length;
@@ -241,6 +241,9 @@ export default function (pi: ExtensionAPI) {
 	};
 
 	const reconstructState = (ctx: ExtensionContext) => {
+		currentTurn = 0;
+		allTerminalSinceTurn = undefined;
+		widgetHidden = false;
 		model = reconstructTodoModelFromBranch(ctx.sessionManager.getBranch());
 		lastOrderReminderKey = undefined;
 		restoreSessionName();
@@ -260,9 +263,6 @@ export default function (pi: ExtensionAPI) {
 	};
 
 	pi.on("session_start", async (_event, ctx) => {
-		currentTurn = 0;
-		allTerminalSinceTurn = undefined;
-		widgetHidden = false;
 		reconstructState(ctx);
 		updateWidget(ctx);
 	});

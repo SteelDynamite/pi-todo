@@ -1,6 +1,7 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import createExtension from "../index.ts";
+import { visibleWidth } from "@earendil-works/pi-tui";
 
 type Handler = (event: unknown, ctx: unknown) => Promise<unknown> | unknown;
 type Mode = "tui" | "rpc" | "json" | "print";
@@ -56,7 +57,7 @@ function createHarness(mode: Mode, branch: unknown[] = []) {
 	return { ctx, emit, sendMessageCalls, setSessionNameCalls, setWidgetCalls, tool };
 }
 
-function renderWidget(harness: ReturnType<typeof createHarness>): string[] {
+function renderWidget(harness: ReturnType<typeof createHarness>, width = 80): string[] {
 	const registration = harness.setWidgetCalls.find((call) => typeof call[1] === "function");
 	assert.ok(registration, "todo widget registered");
 	const factory = registration[1] as (tui: unknown, theme: unknown) => { render: (width: number) => string[] };
@@ -64,7 +65,7 @@ function renderWidget(harness: ReturnType<typeof createHarness>): string[] {
 		{ requestRender() {} },
 		{ fg: (_color: string, text: string) => text, bold: (text: string) => text, strikethrough: (text: string) => text },
 	);
-	return component.render(80);
+	return component.render(width);
 }
 
 function renderedTodoIds(lines: string[]): number[] {
@@ -123,6 +124,41 @@ describe("mode-specific widget behavior", () => {
 		const factory = harness.setWidgetCalls[0]?.[1] as (tui: unknown, theme: unknown) => { render: (width: number) => string[] };
 		const component = factory({ requestRender() {} }, { fg: (_color: string, text: string) => text, bold: (text: string) => text, strikethrough: (text: string) => text });
 		assert.deepEqual(component.render(80), ["● Restored Plan"]);
+	});
+
+	it("restarts auto-hide on tree navigation without carrying another branch's timer", async () => {
+		const branch = [toolEntry({ action: "complete", todos: [{ id: 1, text: "old", state: "done" }], nextId: 2 })];
+		const harness = createHarness("tui", branch);
+		await harness.emit("session_start");
+		for (let turn = 0; turn < 4; turn++) await harness.emit("turn_start");
+		assert.deepEqual(renderWidget(harness), []);
+
+		branch.splice(0, branch.length, toolEntry({ action: "complete", todos: [{ id: 1, text: "other branch", state: "failed" }], nextId: 2 }));
+		await harness.emit("session_tree");
+		assert.deepEqual(renderedTodoIds(renderWidget(harness)), [1]);
+		for (let turn = 0; turn < 3; turn++) await harness.emit("turn_start");
+		assert.deepEqual(renderedTodoIds(renderWidget(harness)), [1]);
+		await harness.emit("turn_start");
+		assert.deepEqual(renderWidget(harness), []);
+		const result = await harness.tool.execute("list", { action: "list" }, undefined, undefined, harness.ctx);
+		assert.match(JSON.stringify(result), /other branch/);
+	});
+
+	it("renders multiline titles and items as width-bounded widget rows without changing state", async () => {
+		const harness = createHarness("tui");
+		const title = "Plan\r\nnext";
+		const text = "first\nsecond\t界";
+		const result = await harness.tool.execute("add", { action: "add", title, items: [text] }, undefined, undefined, harness.ctx);
+		assert.equal((result as { details: { todos: { text: string }[] } }).details.todos[0]?.text, text);
+		assert.deepEqual(harness.setSessionNameCalls, [title]);
+		for (const width of [1, 8, 20, 80]) {
+			const lines = renderWidget(harness, width);
+			assert.equal(lines.length, 2);
+			for (const line of lines) {
+				assert.doesNotMatch(line, /[\r\n\t]/);
+				assert.ok(visibleWidth(line) <= width);
+			}
+		}
 	});
 
 	it("reveals later todos after five leading mixed terminal states", async () => {

@@ -124,6 +124,13 @@ describe("branch reconstruction", () => {
 		});
 	});
 
+	it("skips malformed stored items without aborting restoration", () => {
+		assert.deepEqual(reconstructTodoModelFromBranch([toolEntry({
+			todos: [null, undefined, 7, "bad", {}, { id: 1, text: "valid", done: true }],
+			nextId: 2,
+		})]), { todos: [{ id: 1, text: "valid", state: "done" }], nextId: 2 });
+	});
+
 	it("returns clones so callers cannot mutate persisted reconstruction", () => {
 		const details: TodoDetails = {
 			action: "add",
