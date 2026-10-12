@@ -25,7 +25,7 @@ import {
 	type TodoDetails,
 	type TodoModel,
 } from "./src/todo-core.ts";
-import { green, IN_PROGRESS_FRAMES, DONE_ICON, FAILED_ICON, todoIcon, todoResultText, todoSummary, todoText } from "./src/todo-format.ts";
+import { green, IN_PROGRESS_FRAMES, DONE_ICON, FAILED_ICON, todoIcon, todoResultText, todoSummary, todoText, terminalText } from "./src/todo-format.ts";
 
 const TodoParams = Type.Object({
 	action: StringEnum(["list", "add", "complete", "clear"] as const),
@@ -57,8 +57,9 @@ function renderableDetails(details: unknown): TodoDetails | undefined {
 	const value = details as Partial<TodoDetails> | undefined;
 	if (!value || !isTodoAction(value.action) || !Array.isArray(value.todos) || typeof value.nextId !== "number") return undefined;
 	if (value.title !== undefined && typeof value.title !== "string") return undefined;
+	if (value.error !== undefined && typeof value.error !== "string") return undefined;
 	if (!value.todos.every(isCurrentTodo)) return undefined;
-	if (value.added && !value.added.every(isCurrentTodo)) return undefined;
+	if (value.added !== undefined && (!Array.isArray(value.added) || !value.added.every(isCurrentTodo))) return undefined;
 	if (value.completed && !isCurrentTodo(value.completed)) return undefined;
 	return value as TodoDetails;
 }
@@ -162,7 +163,7 @@ class TodoWidget {
 		const todos = this.isHidden() ? [] : this.getTodos();
 		if (!title && todos.length === 0) return [];
 
-		const header = title ? theme.fg("accent", theme.bold(`● ${title}`)) : theme.fg("accent", todoSummary(todos));
+		const header = title ? theme.fg("accent", theme.bold(`● ${terminalText(title)}`)) : theme.fg("accent", todoSummary(todos));
 		const lines = [truncateToWidth(header, width)];
 		const impliedActiveId = this.agentActive ? todos.find((todo) => !isTerminal(todo))?.id : undefined;
 		let leadingTerminalCount = 0;
@@ -400,12 +401,14 @@ export default function (pi: ExtensionAPI) {
 		},
 
 		renderCall(args, theme, _context) {
-			let text = theme.fg("toolTitle", theme.bold("todo ")) + theme.fg("muted", args.action);
+			// Previews are unvalidated; throwing falls back to Pi's unsanitized argument renderer.
+			if (!args || typeof args !== "object") return new Text(theme.fg("toolTitle", theme.bold("todo")), 0, 0);
+			let text = theme.fg("toolTitle", theme.bold("todo ")) + theme.fg("muted", typeof args.action === "string" ? terminalText(args.action) : "");
 			if ("items" in args && Array.isArray(args.items)) text += ` ${theme.fg("dim", `${args.items.length} item(s)`)}`;
-			if ("title" in args && typeof args.title === "string") text += ` ${theme.fg("accent", args.title)}`;
+			if ("title" in args && typeof args.title === "string") text += ` ${theme.fg("accent", terminalText(args.title))}`;
 			if ("replace" in args && args.replace) text += ` ${theme.fg("warning", "replace")}`;
-			if ("id" in args && args.id !== undefined) text += ` ${theme.fg("accent", `#${args.id}`)}`;
-			if ("state" in args && args.state) text += ` ${theme.fg(args.state === "failed" ? "error" : "success", args.state)}`;
+			if ("id" in args && typeof args.id === "number") text += ` ${theme.fg("accent", `#${args.id}`)}`;
+			if ("state" in args && typeof args.state === "string") text += ` ${theme.fg(args.state === "failed" ? "error" : "success", terminalText(args.state))}`;
 			return new Text(text, 0, 0);
 		},
 
@@ -413,17 +416,17 @@ export default function (pi: ExtensionAPI) {
 			const details = renderableDetails(result.details);
 			if (!details) {
 				const text = result.content[0];
-				return new Text(text?.type === "text" ? text.text : "", 0, 0);
+				return new Text(text?.type === "text" ? terminalText(text.text) : "", 0, 0);
 			}
 
 			if (details.error) {
-				return new Text(theme.fg("error", `Error: ${details.error}`), 0, 0);
+				return new Text(theme.fg("error", terminalText(`Error: ${details.error}`)), 0, 0);
 			}
 
 			switch (details.action) {
 				case "list": {
-					if (details.todos.length === 0) return new Text(details.title ? theme.fg("accent", details.title) + "\n" + theme.fg("dim", "No todos") : theme.fg("dim", "No todos"), 0, 0);
-					let listText = details.title ? theme.fg("accent", details.title) + "\n" : "";
+					if (details.todos.length === 0) return new Text(details.title ? theme.fg("accent", terminalText(details.title)) + "\n" + theme.fg("dim", "No todos") : theme.fg("dim", "No todos"), 0, 0);
+					let listText = details.title ? theme.fg("accent", terminalText(details.title)) + "\n" : "";
 					listText += theme.fg("muted", `${details.todos.length} todo(s):`);
 					const display = expanded ? details.todos : details.todos.slice(0, 5);
 					for (const todo of display) {
@@ -435,11 +438,11 @@ export default function (pi: ExtensionAPI) {
 
 				case "add": {
 					const added = details.added ?? [];
-					const title = details.title ? ` ${theme.fg("accent", details.title)}` : "";
+					const title = details.title ? ` ${theme.fg("accent", terminalText(details.title))}` : "";
 					if (added.length === 0) return new Text(green(DONE_ICON) + theme.fg("success", " Added todos") + title, 0, 0);
 					let text = green(DONE_ICON) + theme.fg("success", ` Added ${added.length} todo(s)`) + title;
 					const display = expanded ? added : added.slice(0, 5);
-					for (const todo of display) text += `\n${theme.fg("accent", `#${todo.id}`)} ${theme.fg("muted", todo.text)}`;
+					for (const todo of display) text += `\n${theme.fg("accent", `#${todo.id}`)} ${theme.fg("muted", terminalText(todo.text))}`;
 					if (!expanded && added.length > 5) text += `\n${theme.fg("dim", `... ${added.length - 5} more`)}`;
 					return new Text(text, 0, 0);
 				}
@@ -449,7 +452,7 @@ export default function (pi: ExtensionAPI) {
 					if (!todo) return new Text(green(DONE_ICON) + theme.fg("success", " Completed todo"), 0, 0);
 					const color = todo.state === "failed" ? "error" : "success";
 					const icon = todo.state === "failed" ? theme.fg("error", FAILED_ICON) : green(DONE_ICON);
-					return new Text(icon + theme.fg(color, ` #${todo.id} ${todo.state}`) + " " + theme.fg("muted", todo.text), 0, 0);
+					return new Text(icon + theme.fg(color, ` #${todo.id} ${todo.state}`) + " " + theme.fg("muted", terminalText(todo.text)), 0, 0);
 				}
 
 				case "clear":

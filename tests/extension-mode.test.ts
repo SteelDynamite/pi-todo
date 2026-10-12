@@ -1,6 +1,7 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import createExtension from "../index.ts";
+import { terminalText, todoText } from "../src/todo-format.ts";
 
 type Handler = (event: unknown, ctx: unknown) => Promise<unknown> | unknown;
 type Mode = "tui" | "rpc" | "json" | "print";
@@ -14,7 +15,12 @@ function createHarness(mode: Mode, branch: unknown[] = []) {
 	const setWidgetCalls: unknown[][] = [];
 	const setSessionNameCalls: string[] = [];
 	const sendMessageCalls: unknown[][] = [];
-	let tool: { execute: (...args: unknown[]) => Promise<unknown> } | undefined;
+	type Tool = {
+		execute: (...args: unknown[]) => Promise<unknown>;
+		renderCall: (args: unknown, theme: unknown, context: unknown) => { render(width: number): string[] };
+		renderResult: (result: unknown, options: unknown, theme: unknown, context: unknown) => { render(width: number): string[] };
+	};
+	let tool: Tool | undefined;
 
 	createExtension({
 		on(event: string, handler: Handler) {
@@ -22,7 +28,7 @@ function createHarness(mode: Mode, branch: unknown[] = []) {
 			existing.push(handler);
 			handlers.set(event, existing);
 		},
-		registerTool(definition: { execute: (...args: unknown[]) => Promise<unknown> }) {
+		registerTool(definition: Tool) {
 			tool = definition;
 		},
 		setSessionName(name: string) {
@@ -73,6 +79,90 @@ function renderedTodoIds(lines: string[]): number[] {
 		return match ? [Number(match[1])] : [];
 	});
 }
+
+describe("tool safety", () => {
+	const payload = "safe\x1b]52;c;dGVzdA==\x07\x1b[2J\x9b2J\r\n\tend";
+	const theme = { fg: (_color: string, text: string) => text, bold: (text: string) => text, strikethrough: (text: string) => text };
+	const assertSafe = (lines: string[]) => {
+		assert.ok(lines.length > 0);
+		for (const line of lines) {
+			// Extension-owned green styling is allowed; payload controls are not.
+			assert.doesNotMatch(line.replace(/\x1b\[(?:32|39)m/g, ""), /[\x00-\x1f\x7f-\x9f]/);
+		}
+	};
+
+	it("escapes every C0/C1 control literally while preserving ordinary Unicode and styling", () => {
+		for (let code = 0; code <= 0x9f; code++) {
+			if (code > 0x1f && code < 0x7f) continue;
+			assert.equal(terminalText(String.fromCharCode(code)), `\\u${code.toString(16).padStart(4, "0")}`);
+		}
+		assert.equal(terminalText("Résumé 中文 ✅"), "Résumé 中文 ✅");
+		for (const state of ["pending", "done", "failed"] as const) {
+			for (const active of [false, true]) {
+				assert.equal(todoText({ id: 1, text: "a\nb", state }, theme, active), "a\\u000ab" + (state === "pending" && active ? "…" : ""));
+			}
+		}
+	});
+
+	it("escapes widget controls without changing tool output, stored text, or session naming in any mode", async () => {
+		for (const mode of ["tui", "rpc", "json", "print"] as const) {
+			const harness = createHarness(mode);
+			await harness.emit("session_start");
+			const result = await harness.tool.execute("add", { action: "add", items: [payload], title: payload }, undefined, undefined, harness.ctx) as { content: { text: string }[]; details: { todos: { text: string }[]; title: string } };
+			if (mode === "tui") assertSafe(renderWidget(harness));
+			else assert.deepEqual(harness.setWidgetCalls, []);
+			assert.deepEqual(harness.setSessionNameCalls, [payload]);
+			assert.equal(result.content[0]?.text, `Added 1 todo:\n#1: ${payload}`);
+			assert.equal(result.details.todos[0]?.text, payload);
+			assert.equal(result.details.title, payload);
+		}
+	});
+
+	it("escapes restored widget controls without changing session naming in any mode", async () => {
+		for (const mode of ["tui", "rpc", "json", "print"] as const) {
+			const harness = createHarness(mode, [toolEntry({ action: "add", todos: [{ id: 1, text: payload, state: "pending" }], nextId: 2, title: payload })]);
+			await harness.emit("session_start");
+			if (mode === "tui") assertSafe(renderWidget(harness));
+			else assert.deepEqual(harness.setWidgetCalls, []);
+			assert.deepEqual(harness.setSessionNameCalls, [payload]);
+		}
+	});
+
+	it("escapes controls in tool call previews, including partial unvalidated arguments", () => {
+		const harness = createHarness("tui");
+		for (const args of [
+			{ action: "add", title: payload },
+			{ action: payload, state: payload, id: payload },
+			{ action: 0, title: payload },
+			{ action: "complete", state: {}, id: { toString: null }, title: payload },
+			{}, null, payload,
+		]) {
+			assertSafe(harness.tool.renderCall(args, theme, {}).render(1000));
+		}
+	});
+
+	it("escapes controls in every tool result rendering path", () => {
+		const harness = createHarness("tui");
+		for (const state of ["pending", "done", "failed"]) {
+			const todo = { id: 1, text: payload, state };
+			for (const details of [
+				{ action: "list", todos: [todo], nextId: 2, title: payload },
+				{ action: "list", todos: [], nextId: 1, title: payload },
+				{ action: "add", todos: [todo], added: [todo], nextId: 2, title: payload },
+				{ action: "add", todos: [], added: [], nextId: 1, title: payload },
+				{ action: "complete", todos: [todo], completed: todo, nextId: 2 },
+				{ action: "complete", todos: [], nextId: 1, error: payload },
+				{ action: "add", todos: [], nextId: 1, added: {} },
+				{ action: "complete", todos: [], nextId: 1, error: { toString: null } },
+				undefined,
+			]) {
+				for (const expanded of [false, true]) {
+					assertSafe(harness.tool.renderResult({ details, content: [{ type: "text", text: payload }] }, { expanded }, theme, {}).render(1000));
+				}
+			}
+		}
+	});
+});
 
 describe("mode-specific widget behavior", () => {
 	it("keeps the todo tool usable without widget work in non-TUI modes", async () => {
